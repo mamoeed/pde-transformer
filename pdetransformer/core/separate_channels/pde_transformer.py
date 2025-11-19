@@ -71,6 +71,8 @@ class MaskEmbedder(nn.Module):
 class PdeParameterEmbedder(nn.Module):
     """
     Embeds PDE parameters into vector representations.
+
+    This includes the class parameter which identifies the pde.
     """
 
     def __init__(self, hidden_size: int, num_pde_parameters_total: int = 1000,
@@ -396,6 +398,10 @@ class TokenInitializer(nn.Module):
         return x
 
 class PDEStage(nn.Module):
+    """
+    This represents one 'stage' of encoder/decoder layer in U net structure of PDE-T.
+
+    """
     def __init__(
         self, dim: int, depth: int,
             num_heads: int, window_size: int, drop_path, mlp_ratio: float = 4.0, apply_shifts: bool = True,
@@ -558,6 +564,16 @@ class SwinDiTBlockOutput(nn.Module):
         return hidden_states
 
 class PosEmbMLPSwinv2D(nn.Module):
+    """
+    Used by WindowAttention2DTime class
+
+
+    This calculates the SWIN V2 style relative position bias to be added in the attention mechanism.
+    Takes relative positions of all tokens and gives back complete B matrix.
+
+    TODO: this needs to be changed to move to physical relative dist
+
+    """
     def __init__(self,
                  window_size: list[int],
                  pretrained_window_size: list[int],
@@ -610,6 +626,9 @@ class PosEmbMLPSwinv2D(nn.Module):
 
 
     def forward(self, input_tensor, local_window_size):
+        """
+        Adds the relative position embeddings to input_tensor.
+        """
 
         relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(-1, self.num_heads)
         relative_position_bias = relative_position_bias_table[self.relative_position_index.view(-1)].view(
@@ -866,6 +885,9 @@ def ct_dewindow(ct, W, H, window_size):
     return ct2
 
 class PosEmbMLPSwinv1D(nn.Module):
+    """
+    Used by HATDiTBlock class.
+    """
     def __init__(self,
                  dim,
                  rank=2,
@@ -927,6 +949,9 @@ class HATDiTBlock(nn.Module):
         - AdaIN for diffusion conditioning
         - Conditioning via context tokens
         - Sliding window
+
+    Used by PDEStage.
+
     """
 
     def __init__(
@@ -1168,9 +1193,11 @@ class HATDiTBlock(nn.Module):
         msa1_shift = msa1_shift.view(Bc, C, 1, -1)
         msa1_scale = msa1_scale.view(Bc, C, 1, -1)
         msa1_gate = msa1_gate.view(Bc, C, 1, -1)
+
         msa2_shift = msa2_shift.view(Bc, C, 1, -1)
         msa2_scale = msa2_scale.view(Bc, C, 1, -1)
         msa2_gate = msa2_gate.view(Bc, C, 1, -1)
+
         mlp_shift = mlp_shift.view(Bc, C, 1, -1)
         mlp_scale = mlp_scale.view(Bc, C, 1, -1)
         mlp_gate = mlp_gate.view(Bc, C, 1, -1)
@@ -1257,6 +1284,14 @@ class HATDiTBlock(nn.Module):
 class PDEImpl(nn.Module):
     """
     PDE Transformer model for separate channels.
+    Class which defines the PDE-T with specific configurations.
+
+    This class uses following classes:
+
+    SimplePatchEmbed (default),     OverlapPatchEmbed
+    TimestepEmbedder, LabelEmbedder, PdeParameterEmbedder
+    PDEStage, UpSample, Downsample
+
     """
 
     def __init__(
@@ -1277,6 +1312,17 @@ class PDEImpl(nn.Module):
             apply_shifts: bool = True,
             **kwargs
     ):
+        """
+
+        Args:
+            num_timesteps: why 6?
+            window_size:
+            patch_size:
+            overlap_size:
+            hidden_size: model hidden size, this doubles with each encoder layer.
+            depth: number of encoder + decoder layers, must be divisible by 2
+
+        """
         super().__init__()
 
         assert len(depth) % 2 == 1, "Encoder and decoder depths must be equal."
@@ -1462,7 +1508,7 @@ class PDEImpl(nn.Module):
 
         emb_list = []
         for i in range(self.num_encoder_layers + 1):
-
+            # this loop prepares the time/chanel/task type embeddings and stores in emb_list for each encoder layer
             t = t.view(-1)
             simulation_dt = simulation_dt.view(-1)
             simulation_time = simulation_time.view(-1)
@@ -1503,7 +1549,7 @@ class PDEImpl(nn.Module):
         residuals_list = []
 
         for i, c in enumerate(emb_list[:-1]):
-            # encoder
+            # encoder layers and DownSample layers
             out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c)
             residuals_list.append(out_enc_level)
 
@@ -1515,7 +1561,7 @@ class PDEImpl(nn.Module):
         x = self.latent(x, c)
 
         for i, (residual, emb) in enumerate(zip(residuals_list[1:][::-1], emb_list[1:-1][::-1])):
-            # decoder
+            # decoder layers and UpSample layers
             x = x.view((B*C,) + x.shape[2:])
             x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
             x = x.view((B, C) + x.shape[1:])
