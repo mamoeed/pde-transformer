@@ -353,6 +353,7 @@ class PDEStage(nn.Module):
             mlp_ratio: float = 4.0,
             drop_path: float = 0.0,
     ):
+        print('PDEStage initialised')
         super().__init__()
 
         self.dim = dim
