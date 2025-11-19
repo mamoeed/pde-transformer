@@ -430,6 +430,7 @@ class PDEStage(nn.Module):
                 class_labels: Optional[torch.LongTensor] = None, ):
 
         B, C, H, W = hidden_states.shape
+        print('In PDEStage, shape of tensor:', hidden_states.shape)
 
         # precompute attention mask
         attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H, W, hidden_states.dtype,
