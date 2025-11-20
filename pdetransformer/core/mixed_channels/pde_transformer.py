@@ -1213,6 +1213,7 @@ class PDEImpl(nn.Module):
 
         # latent
         hidden_size_latent = min(hidden_size * 2 ** self.num_encoder_layers, max_hidden_size)
+        print('latent hidden size=', hidden_size_latent)
         self.latent = PDEStage(dim=hidden_size_latent, num_heads=num_heads,
                                             window_size=window_size, depth=depth[self.num_encoder_layers], **dit_stage_args)
 
