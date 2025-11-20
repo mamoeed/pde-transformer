@@ -510,7 +510,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             torch.meshgrid([relative_coords_h,
                             relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
 
-        print('relative_coords_table shape (1, 2*Wh-1, 2*Ww-1, 2):',relative_coords_table.shape)
+
         if pretrained_window_size[0] > 0:
             relative_coords_table[:, :, :, 0] /= (pretrained_window_size[0] - 1)
             relative_coords_table[:, :, :, 1] /= (pretrained_window_size[1] - 1)
@@ -559,6 +559,7 @@ class PosEmbMLPSwinv2D(nn.Module):
         self.pos_emb = relative_position_bias.unsqueeze(0)
 
         input_tensor += self.pos_emb
+        print('positional embedding to be added shape:', self.pos_emb.shape)
         return input_tensor
 
 class CarrierTokenAttention2DTimestep(nn.Module):
