@@ -641,6 +641,11 @@ class CarrierTokenAttention2DTimestep(nn.Module):
         return x
 
 class WindowAttention2DTime(nn.Module):
+    """
+    Windowed attention with position bias.
+
+    Change: only use position encoding for the first layer
+    """
 
     def __init__(
         self,
@@ -883,6 +888,7 @@ class PDEBlock(nn.Module):
 
         Bc = emb.shape[0]
 
+        print('carrier token active:',self.carrier_token_active)
         if self.carrier_token_active:
 
             Bc, Hc, Wc, Nc = ct.shape
