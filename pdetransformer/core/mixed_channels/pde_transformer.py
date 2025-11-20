@@ -221,7 +221,8 @@ class Downsample(nn.Module):
         else:
             n_feat_out = n_feat // 2
 
-        self.body = nn.Sequential(nn.Conv2d(n_feat, n_feat_out, kernel_size=3, stride=1, padding=1, bias=False),
+        self.body = nn.Sequential(
+            nn.Conv2d(n_feat, n_feat_out, kernel_size=3, stride=1, padding=1, bias=False),
                                   nn.PixelUnshuffle(2))
 
     def forward(self, x):
@@ -1138,6 +1139,8 @@ class ConditionedDecoder2D(nn.Module):
 class PDEImpl(nn.Module):
     """
     Diffusion UNet model with a Transformer backbone.
+
+
     """
 
     def __init__(
@@ -1196,8 +1199,10 @@ class PDEImpl(nn.Module):
             self.__setattr__(f"y_embedder_{i}", LabelEmbedder(num_classes, hidden_size_layer, class_dropout_prob))
 
         # encoder
+        print('encoder hidden sizes')
         for i in range(self.num_encoder_layers):
             hidden_size_layer = min(hidden_size * 2 ** i, max_hidden_size)
+            print('i= ', i, '; hidden_size_layer=', hidden_size_layer)
             self.__setattr__(f"encoder_level_{i}", PDEStage(dim=hidden_size_layer, num_heads=num_heads,
                                             window_size=window_size, depth=depth[i], **dit_stage_args))
             if hidden_size_layer == max_hidden_size:
@@ -1224,9 +1229,10 @@ class PDEImpl(nn.Module):
                                         window_size=window_size, depth=depth[self.num_encoder_layers + 1], **dit_stage_args))
 
         # decoder layers 1 - num_encoder_layers
+        print('decoder hidden sizes')
         for i in range(1, self.num_encoder_layers):
-
             hidden_size_layer = min(hidden_size * 2 ** i, max_hidden_size)
+            print('i= ', i, '; hidden_size_layer=', hidden_size_layer)
             if 2 * hidden_size_layer >= max_hidden_size:
                 keep_dim = True
                 hidden_size_upsample = max_hidden_size
