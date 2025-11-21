@@ -889,7 +889,6 @@ class PDEBlock(nn.Module):
 
         Bc = emb.shape[0]
 
-        print('carrier token active:',self.carrier_token_active)
         if self.carrier_token_active:
 
             Bc, Hc, Wc, Nc = ct.shape
