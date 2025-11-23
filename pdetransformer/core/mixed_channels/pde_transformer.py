@@ -1387,12 +1387,7 @@ class PDEImpl(nn.Module):
             # encoder
             out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c)
             residuals_list.append(out_enc_level)
-            if self.allow_downsampling:
-                x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
-                print('return, x.shape',x.shape)
-            else:
-                x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
-                print('return, x.shape', x.shape)
+            x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
 
 
         c = emb_list[-1]
@@ -1400,10 +1395,7 @@ class PDEImpl(nn.Module):
 
         for i, (residual, emb) in enumerate(zip(residuals_list[1:][::-1], emb_list[1:-1][::-1])):
             # decoder
-            if self.allow_downsampling:
-                x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
-            else:
-                x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
+            x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
             x = torch.cat([x, residual], 1)
             x = self.__getattr__(f"reduce_chan_level{self.num_encoder_layers - i - 1}")(x)
             x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb)
