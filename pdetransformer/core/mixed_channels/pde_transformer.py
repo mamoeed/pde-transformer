@@ -347,6 +347,11 @@ class AdaLayerNormZero(nn.Module):
         return msa_shift, msa_scale, msa_gate, mlp_shift, mlp_scale, mlp_gate
 
 class PDEStage(nn.Module):
+    """
+    This represents one 'stage' of the U net architecture of PDE-T.
+    This stage can consist of multiple transformer encoder/decoder layers depending on
+    what the depth parameter is set as.
+    """
     def __init__(
         self, dim: int, depth: int,
             num_heads: int, window_size: int,
@@ -645,6 +650,7 @@ class WindowAttention2DTime(nn.Module):
     """
     Windowed attention with position bias.
 
+    TODO: change to positional encoding
     Change: only use position encoding for the first layer
     """
 
@@ -1139,7 +1145,8 @@ class PDEImpl(nn.Module):
     """
     Diffusion UNet model with a Transformer backbone.
 
-
+    allow_downsampling: (bool) if set to false, don't downsample tokens, so all layers will have same
+                                number of tokens. Essentially not a U-net architecture anymore.
     """
 
     def __init__(
@@ -1157,6 +1164,7 @@ class PDEImpl(nn.Module):
             num_classes=1000,
             periodic=True,
             carrier_token_active: bool = False,
+            allow_downsampling: bool = False,
             **kwargs
     ):
         super().__init__()
@@ -1173,6 +1181,8 @@ class PDEImpl(nn.Module):
 
         self.use_carrier_tokens = carrier_token_active
         self.max_hidden_size = max_hidden_size
+
+        self.allow_downsampling = allow_downsampling
 
         assert self.max_hidden_size >= hidden_size, f"max_hidden_size {max_hidden_size} must be greater than or equal to hidden_size {hidden_size}."
 
@@ -1208,7 +1218,8 @@ class PDEImpl(nn.Module):
                 keep_dim = True
             else:
                 keep_dim = False
-            self.__setattr__(f"down{i}_{i+1}", Downsample(hidden_size_layer, keep_dim=keep_dim))
+            if allow_downsampling:
+                self.__setattr__(f"down{i}_{i+1}", Downsample(hidden_size_layer, keep_dim=keep_dim))
 
         # latent
         hidden_size_latent = min(hidden_size * 2 ** self.num_encoder_layers, max_hidden_size)
@@ -1223,7 +1234,8 @@ class PDEImpl(nn.Module):
             keep_dim = False
 
         # double hidden size for last decoder layer 0
-        self.__setattr__("up1_0", Upsample(hidden_size_layer0, keep_dim=keep_dim))
+        if allow_downsampling:
+            self.__setattr__("up1_0", Upsample(hidden_size_layer0, keep_dim=keep_dim))
         self.__setattr__("reduce_chan_level0", nn.Conv2d(2 * min(hidden_size, max_hidden_size), hidden_size_layer0, kernel_size=1, bias=True))
         self.__setattr__("decoder_level_0", PDEStage(dim=hidden_size_layer0, num_heads=num_heads,
                                         window_size=window_size, depth=depth[self.num_encoder_layers + 1], **dit_stage_args))
@@ -1240,7 +1252,8 @@ class PDEImpl(nn.Module):
                 keep_dim = False
                 hidden_size_upsample = 2 * hidden_size_layer
 
-            self.__setattr__(f"up{i+1}_{i}", Upsample(hidden_size_upsample, keep_dim=keep_dim))
+            if allow_downsampling:
+                self.__setattr__(f"up{i+1}_{i}", Upsample(hidden_size_upsample, keep_dim=keep_dim))
             self.__setattr__(f"reduce_chan_level{i}", nn.Conv2d(hidden_size_layer * 2, hidden_size_layer, kernel_size=1, bias=True))
             self.__setattr__(f"decoder_level_{i}", PDEStage(dim=hidden_size_layer, num_heads=num_heads,
                                             window_size=window_size, depth=depth[self.num_encoder_layers - i - 1], **dit_stage_args))
@@ -1306,6 +1319,7 @@ class PDEImpl(nn.Module):
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N, ) tensor of diffusion timesteps
         y: (N, ) tensor of class labels [int]
+
         """
         x = self.x_embedder(x)  # (N, C, H, W)
 
@@ -1335,19 +1349,24 @@ class PDEImpl(nn.Module):
             # encoder
             out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c)
             residuals_list.append(out_enc_level)
-            x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
+            if self.allow_downsampling:
+                x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
+            else:
+                x = out_enc_level
 
         c = emb_list[-1]
         x = self.latent(x, c)
 
         for i, (residual, emb) in enumerate(zip(residuals_list[1:][::-1], emb_list[1:-1][::-1])):
             # decoder
-            x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
+            if self.allow_downsampling:
+                x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
             x = torch.cat([x, residual], 1)
             x = self.__getattr__(f"reduce_chan_level{self.num_encoder_layers - i - 1}")(x)
             x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb)
 
-        x = self.__getattr__(f"up1_0")(x)
+        if self.allow_downsampling:
+            x = self.__getattr__(f"up1_0")(x)
         x = torch.cat([x, residuals_list[0]], 1)
         x = self.__getattr__(f"reduce_chan_level0")(x)
         x = self.__getattr__(f"decoder_level_0")(x, emb_list[1])
