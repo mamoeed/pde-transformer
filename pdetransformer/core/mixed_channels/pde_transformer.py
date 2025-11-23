@@ -228,6 +228,22 @@ class Downsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
+class Downsample_FAKE(nn.Module):
+    def __init__(self, n_feat, keep_dim=False):
+        super(Downsample_FAKE, self).__init__()
+
+        if keep_dim:
+            n_feat_out = n_feat
+        else:
+            n_feat_out = n_feat * 2
+
+        self.body = nn.Sequential(
+            nn.Conv2d(n_feat, n_feat_out, kernel_size=3, stride=1, padding=1, bias=False),
+                                )
+
+    def forward(self, x):
+        return self.body(x)
+
 class DownsampleV2(nn.Module):
     def __init__(self, n_feat):
         super(DownsampleV2, self).__init__()
@@ -250,6 +266,21 @@ class Upsample(nn.Module):
 
         self.body = nn.Sequential(nn.Conv2d(n_feat, n_feat_out, kernel_size=3, stride=1, padding=1, bias=False),
                                   nn.PixelShuffle(2))
+
+    def forward(self, x):
+        return self.body(x)
+
+class Upsample_FAKE(nn.Module):
+    def __init__(self, n_feat, keep_dim=False):
+        super(Upsample_FAKE, self).__init__()
+
+        if keep_dim:
+            n_feat_out = n_feat
+        else:
+            n_feat_out = n_feat // 2
+
+        self.body = nn.Sequential(nn.Conv2d(n_feat, n_feat_out, kernel_size=3, stride=1, padding=1, bias=False),
+                                  )
 
     def forward(self, x):
         return self.body(x)
@@ -1220,6 +1251,8 @@ class PDEImpl(nn.Module):
                 keep_dim = False
             if allow_downsampling:
                 self.__setattr__(f"down{i}_{i+1}", Downsample(hidden_size_layer, keep_dim=keep_dim))
+            else:
+                self.__setattr__(f"down{i}_{i + 1}", Downsample_FAKE(hidden_size_layer, keep_dim=keep_dim))
 
         # latent
         hidden_size_latent = min(hidden_size * 2 ** self.num_encoder_layers, max_hidden_size)
@@ -1236,6 +1269,8 @@ class PDEImpl(nn.Module):
         # double hidden size for last decoder layer 0
         if allow_downsampling:
             self.__setattr__("up1_0", Upsample(hidden_size_layer0, keep_dim=keep_dim))
+        else:
+            self.__setattr__("up1_0", Upsample_FAKE(hidden_size_layer0, keep_dim=keep_dim))
         self.__setattr__("reduce_chan_level0", nn.Conv2d(2 * min(hidden_size, max_hidden_size), hidden_size_layer0, kernel_size=1, bias=True))
         self.__setattr__("decoder_level_0", PDEStage(dim=hidden_size_layer0, num_heads=num_heads,
                                         window_size=window_size, depth=depth[self.num_encoder_layers + 1], **dit_stage_args))
@@ -1254,6 +1289,8 @@ class PDEImpl(nn.Module):
 
             if allow_downsampling:
                 self.__setattr__(f"up{i+1}_{i}", Upsample(hidden_size_upsample, keep_dim=keep_dim))
+            else:
+                self.__setattr__(f"up{i + 1}_{i}", Upsample_FAKE(hidden_size_upsample, keep_dim=keep_dim))
             self.__setattr__(f"reduce_chan_level{i}", nn.Conv2d(hidden_size_layer * 2, hidden_size_layer, kernel_size=1, bias=True))
             self.__setattr__(f"decoder_level_{i}", PDEStage(dim=hidden_size_layer, num_heads=num_heads,
                                             window_size=window_size, depth=depth[self.num_encoder_layers - i - 1], **dit_stage_args))
@@ -1354,7 +1391,7 @@ class PDEImpl(nn.Module):
                 x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
                 print('return, x.shape',x.shape)
             else:
-                x = out_enc_level
+                x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
                 print('return, x.shape', x.shape)
 
 
@@ -1365,11 +1402,15 @@ class PDEImpl(nn.Module):
             # decoder
             if self.allow_downsampling:
                 x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
+            else:
+                x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
             x = torch.cat([x, residual], 1)
             x = self.__getattr__(f"reduce_chan_level{self.num_encoder_layers - i - 1}")(x)
             x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb)
 
         if self.allow_downsampling:
+            x = self.__getattr__(f"up1_0")(x)
+        else:
             x = self.__getattr__(f"up1_0")(x)
         x = torch.cat([x, residuals_list[0]], 1)
         x = self.__getattr__(f"reduce_chan_level0")(x)
