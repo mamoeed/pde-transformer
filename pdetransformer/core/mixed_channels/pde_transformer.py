@@ -1243,7 +1243,7 @@ class PDEImpl(nn.Module):
             self.__setattr__(f"up{i+1}_{i}", Upsample(hidden_size_upsample, keep_dim=keep_dim))
             self.__setattr__(f"reduce_chan_level{i}", nn.Conv2d(hidden_size_layer * 2, hidden_size_layer, kernel_size=1, bias=True))
             self.__setattr__(f"decoder_level_{i}", PDEStage(dim=hidden_size_layer, num_heads=num_heads,
-                                            window_size=window_size, depth=depth[self.num_encoder_layers + i + 1], **dit_stage_args))
+                                            window_size=window_size, depth=depth[self.num_encoder_layers - i - 1], **dit_stage_args))
 
         hidden_size_out = min(2 * hidden_size, max_hidden_size)
         self.output = nn.Conv2d(hidden_size_out, hidden_size_out, kernel_size=3, stride=1, padding=1,
