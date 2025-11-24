@@ -566,6 +566,8 @@ class PosEmbMLPSwinv2D(nn.Module):
         TODO: this function must recompute relative_coords_table and relative_position_index
                 based on current forward passinput
         """
+        print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
+              '; local_window_size',local_window_size)
 
         relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
         relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
@@ -607,6 +609,9 @@ class PosEmbMLPSwinv2D(nn.Module):
             -1)
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
         relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
+
+        print('relative_position_bias.shape',relative_position_bias.shape)
+
         n_global_feature = input_tensor.shape[2] - local_window_size
 
         relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
