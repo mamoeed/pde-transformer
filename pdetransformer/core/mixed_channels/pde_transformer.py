@@ -554,6 +554,7 @@ class PosEmbMLPSwinv2D(nn.Module):
                                      nn.ReLU(inplace=True),
                                      nn.Linear(512, num_heads, bias=False))
 
+        self.pretrained_window_size = pretrained_window_size
         self.no_log = no_log
 
         self.pos_emb = None
@@ -573,9 +574,9 @@ class PosEmbMLPSwinv2D(nn.Module):
             torch.meshgrid([relative_coords_h,
                             relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
 
-        if pretrained_window_size[0] > 0:
-            relative_coords_table[:, :, :, 0] /= (pretrained_window_size[0] - 1)
-            relative_coords_table[:, :, :, 1] /= (pretrained_window_size[1] - 1)
+        if self.pretrained_window_size[0] > 0:
+            relative_coords_table[:, :, :, 0] /= (self.pretrained_window_size[0] - 1)
+            relative_coords_table[:, :, :, 1] /= (self.pretrained_window_size[1] - 1)
         else:
             relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
             relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
@@ -599,7 +600,6 @@ class PosEmbMLPSwinv2D(nn.Module):
         relative_position_index = relative_coords.sum(-1).int()
 
         # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
-
 
         relative_position_bias_table = self.cpb_mlp(relative_coords_table).view(-1, self.num_heads)
         relative_position_bias = relative_position_bias_table[relative_position_index.view(-1)].view(
@@ -1372,7 +1372,7 @@ class PDEImpl(nn.Module):
         nn.init.constant_(self.final_layer.out_proj.weight, 0)
         nn.init.constant_(self.final_layer.out_proj.bias, 0)
 
-    def forward(self, x, t, y, s):
+    def forward(self, x, t, y, s=None):
         """
         Forward pass of PDE transformer.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
