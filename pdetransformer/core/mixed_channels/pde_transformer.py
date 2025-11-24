@@ -421,6 +421,9 @@ class PDEStage(nn.Module):
 
 
     def maybe_pad(self, hidden_states, height, width):
+        """
+        Pads the input tensor to make sure whole number of windows fit
+        """
         pad_right = (self.window_size - width % self.window_size) % self.window_size
         pad_bottom = (self.window_size - height % self.window_size) % self.window_size
         pad_values = (0, 0, 0, pad_right, 0, pad_bottom)
@@ -756,6 +759,7 @@ class WindowAttention2DTime(nn.Module):
         self.resolution = resolution
 
     def forward(self, x, attn_mask=None, s=None):
+        print('forward of WindowAttention2DTime. x.shape:',x.shape)
         B, N, C = x.shape
         qkv = (
             self.qkv(x)
@@ -950,7 +954,7 @@ class PDEBlock(nn.Module):
 
         B, H, W, N = x.shape
 
-        print('forward PDEBlock; x.shape:',x.shape,'; carrier token?',self.carrier_token_active)
+        # print('forward PDEBlock; x.shape:',x.shape,'; carrier token?',self.carrier_token_active)
 
         ct = carrier_tokens
 
@@ -998,7 +1002,7 @@ class PDEBlock(nn.Module):
                                                                                       emb=emb)
 
         num_windows_total = int(B // Bc)
-        print('B:',B,', Bc:',Bc, '; num_windows_total:',num_windows_total)
+        # print('B:',B,', Bc:',Bc, '; num_windows_total:',num_windows_total)
 
         msa_shift = msa_shift.repeat_interleave(num_windows_total, dim=0)
         msa_scale = msa_scale.repeat_interleave(num_windows_total, dim=0)
