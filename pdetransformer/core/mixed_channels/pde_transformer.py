@@ -514,7 +514,7 @@ class PDEStage(nn.Module):
 
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
                                       attn_mask=attn_mask,
-                                      s)
+                                      s=s)
 
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
 
@@ -765,7 +765,7 @@ class WindowAttention2DTime(nn.Module):
             logit_scale = torch.clamp(self.logit_scale, max=4.6052).exp()
             attn = attn * logit_scale
 
-        attn = self.pos_emb_funct(attn, self.resolution ** 2, s)
+        attn = self.pos_emb_funct(attn, self.resolution ** 2, s=s)
 
         if attn_mask is not None:
 
@@ -1000,7 +1000,7 @@ class PDEBlock(nn.Module):
 
         x_msa = x_msa * (1 + msa_scale[:, None]) + msa_shift[:, None]
 
-        x_msa = self.attn(x_msa, attn_mask=attn_mask, s)
+        x_msa = self.attn(x_msa, attn_mask=attn_mask, s=s)
         x_msa = x_msa * (1 + msa_gate[:, None])
 
         x = x + self.drop_path(x_msa)
@@ -1408,20 +1408,20 @@ class PDEImpl(nn.Module):
         residuals_list = []
         for i, c in enumerate(emb_list[:-1]):
             # encoder
-            out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c)
+            out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c, s=s)
             residuals_list.append(out_enc_level)
             x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
 
 
         c = emb_list[-1]
-        x = self.latent(x, c)
+        x = self.latent(x, c, s=s)
 
         for i, (residual, emb) in enumerate(zip(residuals_list[1:][::-1], emb_list[1:-1][::-1])):
             # decoder
             x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
             x = torch.cat([x, residual], 1)
             x = self.__getattr__(f"reduce_chan_level{self.num_encoder_layers - i - 1}")(x)
-            x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb)
+            x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb, s=s)
 
         if self.allow_downsampling:
             x = self.__getattr__(f"up1_0")(x)
@@ -1429,7 +1429,7 @@ class PDEImpl(nn.Module):
             x = self.__getattr__(f"up1_0")(x)
         x = torch.cat([x, residuals_list[0]], 1)
         x = self.__getattr__(f"reduce_chan_level0")(x)
-        x = self.__getattr__(f"decoder_level_0")(x, emb_list[1])
+        x = self.__getattr__(f"decoder_level_0")(x, emb_list[1], s=s)
 
         # output
         x = self.output(x)
