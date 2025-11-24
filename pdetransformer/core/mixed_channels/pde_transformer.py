@@ -465,7 +465,20 @@ class PDEStage(nn.Module):
                 hidden_states: torch.Tensor,
                 cond: Optional[torch.Tensor] = None,
                 timestep: Optional[torch.LongTensor] = None,
-                class_labels: Optional[torch.LongTensor] = None, ):
+                class_labels: Optional[torch.LongTensor] = None,
+                s: Optional[torch.Tensor] = None):
+        """
+
+        Args:
+            hidden_states: input tensor to the forward pass
+            cond:
+            timestep:
+            class_labels:
+            s: (A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
+
+        Returns:
+
+        """
 
         B, C, H, W = hidden_states.shape
         print('In PDEStage, shape of tensor:', hidden_states.shape)
@@ -500,7 +513,8 @@ class PDEStage(nn.Module):
             hidden_states = window_partition(shifted_hidden_states, self.window_size)
 
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
-                                      attn_mask=attn_mask)
+                                      attn_mask=attn_mask,
+                                      s)
 
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
 
@@ -540,13 +554,24 @@ class PosEmbMLPSwinv2D(nn.Module):
                                      nn.ReLU(inplace=True),
                                      nn.Linear(512, num_heads, bias=False))
 
+        self.no_log = no_log
+
+        self.pos_emb = None
+
+
+    def forward(self, input_tensor, local_window_size, s):
+
+        """
+        TODO: this function must recompute relative_coords_table and relative_position_index
+                based on current forward passinput
+        """
+
         relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
         relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
 
         relative_coords_table = torch.stack(
             torch.meshgrid([relative_coords_h,
                             relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
-
 
         if pretrained_window_size[0] > 0:
             relative_coords_table[:, :, :, 0] /= (pretrained_window_size[0] - 1)
@@ -555,12 +580,12 @@ class PosEmbMLPSwinv2D(nn.Module):
             relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
             relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
 
-        if not no_log:
+        if not self.no_log:
             relative_coords_table *= 8  # normalize to -8, 8
             relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
                 torch.abs(relative_coords_table) + 1.0) / np.log2(8)
 
-        self.register_buffer("relative_coords_table", relative_coords_table, persistent=False)
+        # self.register_buffer("relative_coords_table", relative_coords_table, persistent=False)
 
         coords_h = torch.arange(self.window_size[0])
         coords_w = torch.arange(self.window_size[1])
@@ -573,15 +598,11 @@ class PosEmbMLPSwinv2D(nn.Module):
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
         relative_position_index = relative_coords.sum(-1).int()
 
-        self.register_buffer("relative_position_index", relative_position_index, persistent=False)
-
-        self.pos_emb = None
+        # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
 
 
-    def forward(self, input_tensor, local_window_size):
-
-        relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(-1, self.num_heads)
-        relative_position_bias = relative_position_bias_table[self.relative_position_index.view(-1)].view(
+        relative_position_bias_table = self.cpb_mlp(relative_coords_table).view(-1, self.num_heads)
+        relative_position_bias = relative_position_bias_table[relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
             -1)
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
@@ -727,7 +748,7 @@ class WindowAttention2DTime(nn.Module):
 
         self.resolution = resolution
 
-    def forward(self, x, attn_mask=None):
+    def forward(self, x, attn_mask=None, s=None):
         B, N, C = x.shape
         qkv = (
             self.qkv(x)
@@ -744,7 +765,7 @@ class WindowAttention2DTime(nn.Module):
             logit_scale = torch.clamp(self.logit_scale, max=4.6052).exp()
             attn = attn * logit_scale
 
-        attn = self.pos_emb_funct(attn, self.resolution ** 2)
+        attn = self.pos_emb_funct(attn, self.resolution ** 2, s)
 
         if attn_mask is not None:
 
@@ -917,7 +938,8 @@ class PDEBlock(nn.Module):
                 timestep: Optional[torch.LongTensor] = None,
                 class_labels: Optional[torch.LongTensor] = None,
                 emb: Optional[torch.LongTensor] = None,
-                attn_mask: Optional[torch.Tensor] = None):
+                attn_mask: Optional[torch.Tensor] = None,
+                s: Optional[torch.Tensor] = None):
 
         B, H, W, N = x.shape
         ct = carrier_tokens
@@ -978,7 +1000,7 @@ class PDEBlock(nn.Module):
 
         x_msa = x_msa * (1 + msa_scale[:, None]) + msa_shift[:, None]
 
-        x_msa = self.attn(x_msa, attn_mask=attn_mask)
+        x_msa = self.attn(x_msa, attn_mask=attn_mask, s)
         x_msa = x_msa * (1 + msa_gate[:, None])
 
         x = x + self.drop_path(x_msa)
@@ -1350,13 +1372,14 @@ class PDEImpl(nn.Module):
         nn.init.constant_(self.final_layer.out_proj.weight, 0)
         nn.init.constant_(self.final_layer.out_proj.bias, 0)
 
-    def forward(self, x, t, y):
+    def forward(self, x, t, y, s):
         """
         Forward pass of PDE transformer.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N, ) tensor of diffusion timesteps
         y: (N, ) tensor of class labels [int]
 
+        s: (N, A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
         """
         x = self.x_embedder(x)  # (N, C, H, W)
 
