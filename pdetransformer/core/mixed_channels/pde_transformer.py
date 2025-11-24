@@ -709,6 +709,8 @@ class WindowAttention2DTime(nn.Module):
 
     TODO: change to positional encoding
     Change: only use position encoding for the first layer
+
+    Used by PDEBlock.
     """
 
     def __init__(
@@ -947,6 +949,9 @@ class PDEBlock(nn.Module):
                 s: Optional[torch.Tensor] = None):
 
         B, H, W, N = x.shape
+
+        print('forward PDEBlock; x.shape:',x.shape,'; carrier token?',self.carrier_token_active)
+
         ct = carrier_tokens
 
         x = x.view(B, H * W, N)
@@ -993,6 +998,7 @@ class PDEBlock(nn.Module):
                                                                                       emb=emb)
 
         num_windows_total = int(B // Bc)
+        print('B:',B,', Bc:',Bc, '; num_windows_total:',num_windows_total)
 
         msa_shift = msa_shift.repeat_interleave(num_windows_total, dim=0)
         msa_scale = msa_scale.repeat_interleave(num_windows_total, dim=0)
