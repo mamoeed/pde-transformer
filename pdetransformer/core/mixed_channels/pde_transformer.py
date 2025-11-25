@@ -547,7 +547,8 @@ class PosEmbMLPSwinv2D(nn.Module):
                  window_size: list[int],
                  pretrained_window_size: list[int],
                  num_heads: int,
-                 no_log=False):
+                 no_log=False,
+                 use_relative_physical=False):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
@@ -560,6 +561,7 @@ class PosEmbMLPSwinv2D(nn.Module):
         self.pretrained_window_size = pretrained_window_size
         self.no_log = no_log
 
+        self.use_relative_physical = use_relative_physical
         self.pos_emb = None
 
 
@@ -571,58 +573,60 @@ class PosEmbMLPSwinv2D(nn.Module):
         """
         print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
               '; local_window_size',local_window_size)
+        if self.use_relative_physical:
+            relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
+            relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
 
-        relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
-        relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
+            relative_coords_table = torch.stack(
+                torch.meshgrid([relative_coords_h,
+                                relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
 
-        relative_coords_table = torch.stack(
-            torch.meshgrid([relative_coords_h,
-                            relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
+            if self.pretrained_window_size[0] > 0:
+                relative_coords_table[:, :, :, 0] /= (self.pretrained_window_size[0] - 1)
+                relative_coords_table[:, :, :, 1] /= (self.pretrained_window_size[1] - 1)
+            else:
+                relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
+                relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
 
-        if self.pretrained_window_size[0] > 0:
-            relative_coords_table[:, :, :, 0] /= (self.pretrained_window_size[0] - 1)
-            relative_coords_table[:, :, :, 1] /= (self.pretrained_window_size[1] - 1)
-        else:
-            relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
-            relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
+            if not self.no_log:
+                relative_coords_table *= 8  # normalize to -8, 8
+                relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
+                    torch.abs(relative_coords_table) + 1.0) / np.log2(8)
 
-        if not self.no_log:
-            relative_coords_table *= 8  # normalize to -8, 8
-            relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
-                torch.abs(relative_coords_table) + 1.0) / np.log2(8)
+            # self.register_buffer("relative_coords_table", relative_coords_table, persistent=False)
 
-        # self.register_buffer("relative_coords_table", relative_coords_table, persistent=False)
+            coords_h = torch.arange(self.window_size[0])
+            coords_w = torch.arange(self.window_size[1])
+            coords = torch.stack(torch.meshgrid([coords_h, coords_w]))
+            coords_flatten = torch.flatten(coords, 1)
+            relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
+            relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+            relative_coords[:, :, 0] += self.window_size[0] - 1
+            relative_coords[:, :, 1] += self.window_size[1] - 1
+            relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
+            relative_position_index = relative_coords.sum(-1).int()
 
-        coords_h = torch.arange(self.window_size[0])
-        coords_w = torch.arange(self.window_size[1])
-        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))
-        coords_flatten = torch.flatten(coords, 1)
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
-        relative_coords[:, :, 0] += self.window_size[0] - 1
-        relative_coords[:, :, 1] += self.window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
-        relative_position_index = relative_coords.sum(-1).int()
+            # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
 
-        # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
+            relative_position_bias_table = self.cpb_mlp(relative_coords_table).view(-1, self.num_heads)
+            relative_position_bias = relative_position_bias_table[relative_position_index.view(-1)].view(
+                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+                -1)
+            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
+            relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
 
-        relative_position_bias_table = self.cpb_mlp(relative_coords_table).view(-1, self.num_heads)
-        relative_position_bias = relative_position_bias_table[relative_position_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
-            -1)
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
-        relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
+            print('relative_position_bias.shape',relative_position_bias.shape)
 
-        print('relative_position_bias.shape',relative_position_bias.shape)
+            n_global_feature = input_tensor.shape[2] - local_window_size
 
-        n_global_feature = input_tensor.shape[2] - local_window_size
+            relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
+                                                                                      0,
+                                                                                      n_global_feature,
+                                                                                      0)).contiguous()
 
-        relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
-                                                                                  0,
-                                                                                  n_global_feature,
-                                                                                  0)).contiguous()
+            self.pos_emb = relative_position_bias.unsqueeze(0)
+        else: # use the relative physical position, assumes availability of correct s matrix
 
-        self.pos_emb = relative_position_bias.unsqueeze(0)
 
         input_tensor += self.pos_emb
         print('positional embedding to be added shape:', self.pos_emb.shape)
@@ -767,7 +771,7 @@ class WindowAttention2DTime(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
-
+        print('q:', q.shape,'k:', k.shape,'v:', v.shape)
         if self.attn_type == 'v1':
             attn = (q @ k.transpose(-2, -1)) * self.scale
 
@@ -1015,7 +1019,7 @@ class PDEBlock(nn.Module):
 
         x_msa = x_msa * (1 + msa_scale[:, None]) + msa_shift[:, None]
 
-        x_msa = self.attn(x_msa, attn_mask=attn_mask, s=s)
+        x_msa = self.attn(x_msa, attn_mask=attn_mask, s=s) # WindowAttention2DTime
         x_msa = x_msa * (1 + msa_gate[:, None])
 
         x = x + self.drop_path(x_msa)
