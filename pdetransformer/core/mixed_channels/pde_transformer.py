@@ -625,7 +625,7 @@ class PosEmbMLPSwinv2D(nn.Module):
                                                                                       0)).contiguous()
 
             self.pos_emb = relative_position_bias.unsqueeze(0)
-        else: # use the relative physical position, assumes availability of correct s matrix
+        # else: # use the relative physical position, assumes availability of correct s matrix
 
 
         input_tensor += self.pos_emb
