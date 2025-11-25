@@ -548,7 +548,7 @@ class PosEmbMLPSwinv2D(nn.Module):
                  pretrained_window_size: list[int],
                  num_heads: int,
                  no_log=False,
-                 use_relative_physical=False):
+                 use_relative_physical=True):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
