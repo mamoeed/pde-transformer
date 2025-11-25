@@ -507,7 +507,7 @@ class PDEStage(nn.Module):
 
             shifted_hidden_states, pad_values = self.maybe_pad(shifted_hidden_states, H, W)
             _, height_pad, width_pad, _ = shifted_hidden_states.shape
-
+            print('after padding shape: ',shifted_hidden_states.shape)
             if self.carrier_token_active:
                 ct = self.global_tokenizer(hidden_states)
             else:
@@ -521,8 +521,12 @@ class PDEStage(nn.Module):
 
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
 
+            print('after window_reverse shape: ', hidden_states.shape)
+
             if height_pad > 0 or width_pad > 0:
                 hidden_states = hidden_states[:, :H, :W, :].contiguous()
+
+            print('after capping to image shape: ', hidden_states.shape)
 
             if shift_size > 0:
                 hidden_states = torch.roll(hidden_states, shifts=(shift_size, shift_size),
