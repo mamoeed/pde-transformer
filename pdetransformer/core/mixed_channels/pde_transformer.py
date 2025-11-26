@@ -416,8 +416,8 @@ class PosEmbMLPSwinv2D(nn.Module):
         TODO: this function must recompute relative_coords_table and relative_position_index
                 based on current forward passinput
         """
-        print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
-              '; local_window_size',local_window_size)
+        # print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
+        #       '; local_window_size',local_window_size)
         if not self.use_relative_physical:
             relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
             relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
@@ -471,15 +471,14 @@ class PosEmbMLPSwinv2D(nn.Module):
 
             self.pos_emb = relative_position_bias.unsqueeze(0)
         else: # use the relative physical position, assumes availability of correct s matrix
-            print('OOPSS ><><')
-            print('s.shape:',s.shape)
+            # print('s.shape:',s.shape)
 
             # fold physical positions tensor into window partitions:
             _, height, width = s.shape
             s = s.view(
                 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
             ).permute(0, 1, 3, 2, 4).reshape(2, -1, self.window_size[0]*self.window_size[1])
-            print('s.shape:',s.shape)
+            # print('s.shape:',s.shape)
 
             relative_position_bias = (s[:, :, None, :] - s[:, :, :, None]).permute(1, 2, 3, 0)
             relative_position_bias = self.cpb_mlp(relative_position_bias).permute(0,3,1,2)
@@ -487,11 +486,11 @@ class PosEmbMLPSwinv2D(nn.Module):
             num_batches = int(input_tensor.shape[0] / s.shape[1])
 
             relative_position_bias = relative_position_bias.repeat(num_batches,1,1,1)
-            print('relative_position_bias.shape',relative_position_bias.shape)
+            # print('relative_position_bias.shape',relative_position_bias.shape)
             self.pos_emb = relative_position_bias
 
         input_tensor += self.pos_emb
-        print('positional embedding to be added shape:', self.pos_emb.shape)
+        # print('positional embedding to be added shape:', self.pos_emb.shape)
         return input_tensor
 
 class CarrierTokenAttention2DTimestep(nn.Module):
@@ -629,7 +628,7 @@ class WindowAttention2DTime(nn.Module):
         self.resolution = resolution
 
     def forward(self, x, attn_mask=None, s=None):
-        print('forward of WindowAttention2DTime. x.shape:',x.shape)
+        # print('forward of WindowAttention2DTime. x.shape:',x.shape)
         B, N, C = x.shape
         qkv = (
             self.qkv(x)
@@ -1058,7 +1057,7 @@ class PDEStage(nn.Module):
 
             shifted_hidden_states, pad_values = self.maybe_pad(shifted_hidden_states, H, W)
             _, height_pad, width_pad, _ = shifted_hidden_states.shape
-            print('after padding shape: ',shifted_hidden_states.shape)
+            # print('after padding shape: ',shifted_hidden_states.shape)
 
             if self.use_relative_physical:
                 # pad the relative physical positions `s` to make windows fit
@@ -1074,21 +1073,21 @@ class PDEStage(nn.Module):
 
             hidden_states = window_partition(shifted_hidden_states, self.window_size)
 
-            print('before PDEBlock forward called, shape: ', hidden_states.shape)
+            # print('before PDEBlock forward called, shape: ', hidden_states.shape)
 
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
                                       attn_mask=attn_mask,
                                       s=padded_s)
 
-            print('after PDEBlock returned, shape: ', hidden_states.shape)
+            # print('after PDEBlock returned, shape: ', hidden_states.shape)
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
 
-            print('after window_reverse shape: ', hidden_states.shape)
+            # print('after window_reverse shape: ', hidden_states.shape)
 
             if height_pad > 0 or width_pad > 0:
                 hidden_states = hidden_states[:, :H, :W, :].contiguous()
 
-            print('after capping to image shape: ', hidden_states.shape)
+            # print('after capping to image shape: ', hidden_states.shape)
 
             if shift_size > 0:
                 hidden_states = torch.roll(hidden_states, shifts=(shift_size, shift_size),
