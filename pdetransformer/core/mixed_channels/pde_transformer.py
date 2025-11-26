@@ -478,20 +478,20 @@ class PosEmbMLPSwinv2D(nn.Module):
             s = s.view(
                 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
             ).permute(0, 1, 3, 2, 4).reshape(2, -1, self.window_size[0]*self.window_size[1])
-            # print('s.shape:',s.shape)
+            print('s.shape:',s.shape)
 
             relative_position_bias = (s[:, :, None, :] - s[:, :, :, None]).permute(1, 2, 3, 0)
             relative_position_bias = self.cpb_mlp(relative_position_bias).permute(0,3,1,2)
 
             num_batches = int(input_tensor.shape[0] / s.shape[1])
-
+            print('num_batches:', num_batches)
             relative_position_bias = relative_position_bias.unsqueeze(0)
             relative_position_bias = relative_position_bias.expand(num_batches,-1,-1,-1,-1)
-            # print('relative_position_bias.shape',relative_position_bias.shape)
-            # self.pos_emb = relative_position_bias
+            print('relative_position_bias.shape',relative_position_bias.shape)
+            self.pos_emb = relative_position_bias
 
-        # input_tensor += self.pos_emb
-        input_tensor += relative_position_bias
+        input_tensor += self.pos_emb
+        # input_tensor += relative_position_bias
         # print('positional embedding to be added shape:', self.pos_emb.shape)
         return input_tensor
 
