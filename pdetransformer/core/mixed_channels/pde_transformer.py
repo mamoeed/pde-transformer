@@ -1472,14 +1472,12 @@ class PDEImpl(nn.Module):
             c = t_emb + y_emb
             emb_list.append(c)
 
-        print('forward encoder part')
         residuals_list = []
         for i, c in enumerate(emb_list[:-1]):
             # encoder
             out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c, s=s)
             residuals_list.append(out_enc_level)
             x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
-
 
         c = emb_list[-1]
         x = self.latent(x, c, s=s)
