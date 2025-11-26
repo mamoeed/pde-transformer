@@ -1044,6 +1044,13 @@ class PDEStage(nn.Module):
         attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H, W, hidden_states.dtype,
                                                    hidden_states.device)
 
+        if self.use_relative_physical:
+            # pad the relative physical positions `s` to make windows fit
+            pad_right = (self.window_size - W % self.window_size) % self.window_size
+            pad_bottom = (self.window_size - H % self.window_size) % self.window_size
+            pad_values = (0, pad_right, 0, pad_bottom)
+            s = nn.functional.pad(s, pad_values)
+
         for n, block in enumerate(self.blocks):
 
             shift_size = 0 if n % 2 == 0 else self.window_size // 2
@@ -1063,12 +1070,7 @@ class PDEStage(nn.Module):
             _, height_pad, width_pad, _ = shifted_hidden_states.shape
             # print('after padding shape: ',shifted_hidden_states.shape)
 
-            if self.use_relative_physical:
-                # pad the relative physical positions `s` to make windows fit
-                pad_right = (self.window_size - W % self.window_size) % self.window_size
-                pad_bottom = (self.window_size - H % self.window_size) % self.window_size
-                pad_values = (0, pad_right, 0, pad_bottom)
-                padded_s = nn.functional.pad(s, pad_values)
+
 
             if self.carrier_token_active:
                 ct = self.global_tokenizer(hidden_states)
@@ -1081,7 +1083,7 @@ class PDEStage(nn.Module):
 
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
                                       attn_mask=attn_mask,
-                                      s=padded_s)
+                                      s=s)
 
             # print('after PDEBlock returned, shape: ', hidden_states.shape)
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
