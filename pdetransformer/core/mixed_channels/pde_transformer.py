@@ -478,7 +478,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             s = s.view(
                 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
             ).permute(0, 1, 3, 2, 4).reshape(2, -1, self.window_size[0]*self.window_size[1])
-            print('s.shape:',s.shape)
+            # print('s.shape:',s.shape)
 
             relative_position_bias = (s[:, :, None, :] - s[:, :, :, None]).permute(1, 2, 3, 0)
             relative_position_bias = self.cpb_mlp(relative_position_bias).permute(0,3,1,2)
@@ -636,7 +636,7 @@ class WindowAttention2DTime(nn.Module):
             .permute(2, 0, 3, 1, 4)
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
-        print('q:', q.shape,'k:', k.shape,'v:', v.shape)
+        # print('q:', q.shape,'k:', k.shape,'v:', v.shape)
         if self.attn_type == 'v1':
             attn = (q @ k.transpose(-2, -1)) * self.scale
 
@@ -1034,7 +1034,7 @@ class PDEStage(nn.Module):
         """
 
         B, C, H, W = hidden_states.shape
-        print('In PDEStage, shape of tensor:', hidden_states.shape)
+        # print('In PDEStage, shape of tensor:', hidden_states.shape)
 
         # precompute attention mask
         attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H, W, hidden_states.dtype,
