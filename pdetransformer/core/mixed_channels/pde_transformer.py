@@ -490,10 +490,10 @@ class PosEmbMLPSwinv2D(nn.Module):
             # relative_position_bias = relative_position_bias.expand(num_batches,-1,-1,-1,-1)
 
             print('relative_position_bias.shape',relative_position_bias.shape)
-            self.pos_emb = relative_position_bias
+            # self.pos_emb = relative_position_bias
 
-        input_tensor += self.pos_emb
-        # input_tensor += relative_position_bias
+        # input_tensor += self.pos_emb
+        input_tensor += relative_position_bias
         # print('positional embedding to be added shape:', self.pos_emb.shape)
         return input_tensor
 
