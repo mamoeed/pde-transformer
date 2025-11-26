@@ -753,6 +753,7 @@ class PDEBlock(nn.Module):
             attn_drop=attn_drop,
             proj_drop=drop,
             resolution=window_size,
+            use_relative_physical=use_relative_physical
         )
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -934,6 +935,7 @@ class PDEStage(nn.Module):
                 mlp_ratio=mlp_ratio,
                 carrier_token_active=carrier_token_active,
                 drop_path=drop_path,
+                use_relative_physical=use_relative_physical
             )
             blocks.append(block)
 
