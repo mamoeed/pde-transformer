@@ -602,6 +602,7 @@ class WindowAttention2DTime(nn.Module):
             window_size=[resolution, resolution],
             pretrained_window_size=[resolution, resolution],
             num_heads=num_heads,
+            use_relative_physical=use_relative_physical
         )
         self.attn_type = attn_type
 
