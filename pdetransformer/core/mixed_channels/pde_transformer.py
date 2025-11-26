@@ -482,7 +482,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             print('s.shape:',s.shape)
 
             relative_position_bias = (s[:, :, None, :] - s[:, :, :, None]).permute(1, 2, 3, 0)
-            relative_position_bias = self.cpb_mlp(differences).permute(0,3,1,2)
+            relative_position_bias = self.cpb_mlp(relative_position_bias).permute(0,3,1,2)
             relative_position_bias = relative_position_bias.repeat(self.num_heads,1,1,1)
             print('relative_position_bias.shape',relative_position_bias.shape)
 
