@@ -519,6 +519,7 @@ class PDEStage(nn.Module):
                                       attn_mask=attn_mask,
                                       s=s)
 
+            print('after WindowAttention2DTime shape: ', hidden_states.shape)
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
 
             print('after window_reverse shape: ', hidden_states.shape)
