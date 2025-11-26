@@ -474,7 +474,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             print('OOPSS ><><')
             print('s.shape:',s.shape)
 
-            # fold tensor into window partitions:
+            # fold physical positions tensor into window partitions:
             _, height, width = s.shape
             s = s.view(
                 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
@@ -483,7 +483,10 @@ class PosEmbMLPSwinv2D(nn.Module):
 
             relative_position_bias = (s[:, :, None, :] - s[:, :, :, None]).permute(1, 2, 3, 0)
             relative_position_bias = self.cpb_mlp(relative_position_bias).permute(0,3,1,2)
-            relative_position_bias = relative_position_bias.repeat(self.num_heads,1,1,1)
+
+            num_batches = input_tensor.shape[0] / s.shape[1]
+
+            relative_position_bias = relative_position_bias.repeat(num_batches,1,1,1)
             print('relative_position_bias.shape',relative_position_bias.shape)
 
         input_tensor += self.pos_emb
