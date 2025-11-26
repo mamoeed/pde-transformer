@@ -1065,7 +1065,7 @@ class PDEStage(nn.Module):
                 pad_right = (self.window_size - W % self.window_size) % self.window_size
                 pad_bottom = (self.window_size - H % self.window_size) % self.window_size
                 pad_values = (0, pad_right, 0, pad_bottom)
-                s = nn.functional.pad(s, pad_values)
+                padded_s = nn.functional.pad(s, pad_values)
 
             if self.carrier_token_active:
                 ct = self.global_tokenizer(hidden_states)
@@ -1078,7 +1078,7 @@ class PDEStage(nn.Module):
 
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
                                       attn_mask=attn_mask,
-                                      s=s)
+                                      s=padded_s)
 
             print('after PDEBlock returned, shape: ', hidden_states.shape)
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
