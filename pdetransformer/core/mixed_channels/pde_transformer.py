@@ -471,8 +471,9 @@ class PosEmbMLPSwinv2D(nn.Module):
                                                                                       0)).contiguous()
 
             self.pos_emb = relative_position_bias.unsqueeze(0)
-        # else: # use the relative physical position, assumes availability of correct s matrix
-
+        else: # use the relative physical position, assumes availability of correct s matrix
+            print('OOPSS ><><')
+            print('s:\n',s)
 
         input_tensor += self.pos_emb
         print('positional embedding to be added shape:', self.pos_emb.shape)
