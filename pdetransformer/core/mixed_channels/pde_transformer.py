@@ -409,7 +409,7 @@ class PosEmbMLPSwinv2D(nn.Module):
 
         self.use_relative_physical = use_relative_physical
         self.pos_emb = None
-
+        print('use_relative_physical',use_relative_physical)
 
     def forward(self, input_tensor, local_window_size, s):
 
