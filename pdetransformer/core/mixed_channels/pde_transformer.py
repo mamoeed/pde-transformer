@@ -477,8 +477,8 @@ class PosEmbMLPSwinv2D(nn.Module):
             # fold tensor into window partitions:
             _, height, width = s.shape
             s = s.view(
-                2, height // window[0], window[0], width // window[1], window[1]
-            ).permute(0, 1, 3, 2, 4).reshape(2, -1, window[0]*window[1])
+                2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
+            ).permute(0, 1, 3, 2, 4).reshape(2, -1, self.window_size[0]*self.window_size[1])
             print('s.shape:',s.shape)
 
             relative_position_bias = (s[:, :, None, :] - s[:, :, :, None]).permute(1, 2, 3, 0)
