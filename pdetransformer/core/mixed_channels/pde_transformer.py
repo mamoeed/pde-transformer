@@ -947,6 +947,7 @@ class PDEStage(nn.Module):
         self.shift_size = window_size // 2
 
         self.carrier_token_active = carrier_token_active
+        self.use_relative_physical = use_relative_physical
 
         if self.carrier_token_active:
             self.global_tokenizer = TokenInitializer(dim,
@@ -1041,6 +1042,14 @@ class PDEStage(nn.Module):
             shifted_hidden_states, pad_values = self.maybe_pad(shifted_hidden_states, H, W)
             _, height_pad, width_pad, _ = shifted_hidden_states.shape
             print('after padding shape: ',shifted_hidden_states.shape)
+
+            if self.use_relative_physical:
+                # pad the relative physical positions `s` to make windows fit
+                pad_right = (self.window_size - W % self.window_size) % self.window_size
+                pad_bottom = (self.window_size - H % self.window_size) % self.window_size
+                pad_values = (0, pad_right, 0, pad_bottom)
+                s = nn.functional.pad(s, pad_values)
+
             if self.carrier_token_active:
                 ct = self.global_tokenizer(hidden_states)
             else:
@@ -1048,11 +1057,13 @@ class PDEStage(nn.Module):
 
             hidden_states = window_partition(shifted_hidden_states, self.window_size)
 
+            print('before PDEBlock forward called, shape: ', hidden_states.shape)
+
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
                                       attn_mask=attn_mask,
                                       s=s)
 
-            print('after WindowAttention2DTime shape: ', hidden_states.shape)
+            print('after PDEBlock returned, shape: ', hidden_states.shape)
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
 
             print('after window_reverse shape: ', hidden_states.shape)
