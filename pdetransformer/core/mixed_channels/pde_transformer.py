@@ -377,165 +377,6 @@ class AdaLayerNormZero(nn.Module):
         msa_shift, msa_scale, msa_gate, mlp_shift, mlp_scale, mlp_gate = emb.chunk(6, dim=1)
         return msa_shift, msa_scale, msa_gate, mlp_shift, mlp_scale, mlp_gate
 
-class PDEStage(nn.Module):
-    """
-    This represents one 'stage' of the U net architecture of PDE-T.
-    This stage can consist of multiple transformer encoder/decoder layers depending on
-    what the depth parameter is set as.
-    """
-    def __init__(
-        self, dim: int, depth: int,
-            num_heads: int, window_size: int,
-            periodic=False, carrier_token_active: bool = True,
-            mlp_ratio: float = 4.0,
-            drop_path: float = 0.0,
-    ):
-        print('PDEStage initialised')
-        super().__init__()
-
-        self.dim = dim
-        blocks = []
-        for i in range(depth):
-
-            block = PDEBlock(
-                dim=dim,
-                num_heads=num_heads,
-                window_size=window_size,
-                mlp_ratio=mlp_ratio,
-                carrier_token_active=carrier_token_active,
-                drop_path=drop_path,
-            )
-            blocks.append(block)
-
-        self.blocks = nn.ModuleList(blocks)
-        self.periodic = periodic
-        self.window_size = window_size
-
-        self.shift_size = window_size // 2
-
-        self.carrier_token_active = carrier_token_active
-
-        if self.carrier_token_active:
-            self.global_tokenizer = TokenInitializer(dim,
-                                                     window_size)
-
-
-    def maybe_pad(self, hidden_states, height, width):
-        """
-        Pads the input tensor to make sure whole number of windows fit
-        """
-        pad_right = (self.window_size - width % self.window_size) % self.window_size
-        pad_bottom = (self.window_size - height % self.window_size) % self.window_size
-        pad_values = (0, 0, 0, pad_right, 0, pad_bottom)
-        hidden_states = nn.functional.pad(hidden_states, pad_values)
-        return hidden_states, pad_values
-
-    def get_attn_mask(self, shift_size, height, width, dtype, device):
-
-        if height < self.window_size or width < self.window_size:
-            return None
-
-        if self.shift_size > 0 and not self.periodic:
-
-            # calculate attention mask for shifted window multihead self attention
-            img_mask = torch.zeros((1, height, width, 1), dtype=dtype, device=device)
-            height_slices = (
-                slice(0, -self.window_size),
-                slice(-self.window_size, -self.shift_size),
-                slice(-self.shift_size, None),
-            )
-            width_slices = (
-                slice(0, -self.window_size),
-                slice(-self.window_size, -self.shift_size),
-                slice(-self.shift_size, None),
-            )
-            count = 0
-            for height_slice in height_slices:
-                for width_slice in width_slices:
-                    img_mask[:, height_slice, width_slice, :] = count
-                    count += 1
-
-            mask_windows = window_partition(img_mask, self.window_size)
-            mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
-            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-        else:
-
-            attn_mask = None
-        return attn_mask
-
-    def forward(self,
-                hidden_states: torch.Tensor,
-                cond: Optional[torch.Tensor] = None,
-                timestep: Optional[torch.LongTensor] = None,
-                class_labels: Optional[torch.LongTensor] = None,
-                s: Optional[torch.Tensor] = None):
-        """
-
-        Args:
-            hidden_states: input tensor to the forward pass
-            cond:
-            timestep:
-            class_labels:
-            s: (A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
-
-        Returns:
-
-        """
-
-        B, C, H, W = hidden_states.shape
-        print('In PDEStage, shape of tensor:', hidden_states.shape)
-
-        # precompute attention mask
-        attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H, W, hidden_states.dtype,
-                                                   hidden_states.device)
-
-        for n, block in enumerate(self.blocks):
-
-            shift_size = 0 if n % 2 == 0 else self.window_size // 2
-
-            # channels last
-            hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
-
-            if shift_size > 0:
-                attn_mask = attn_mask_precomputed
-                shifted_hidden_states = torch.roll(hidden_states, shifts=(-shift_size, -shift_size),
-                                                   dims=(1, 2))
-            else:
-                attn_mask = None
-                shifted_hidden_states = hidden_states
-
-            shifted_hidden_states, pad_values = self.maybe_pad(shifted_hidden_states, H, W)
-            _, height_pad, width_pad, _ = shifted_hidden_states.shape
-            print('after padding shape: ',shifted_hidden_states.shape)
-            if self.carrier_token_active:
-                ct = self.global_tokenizer(hidden_states)
-            else:
-                ct = None
-
-            hidden_states = window_partition(shifted_hidden_states, self.window_size)
-
-            hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
-                                      attn_mask=attn_mask,
-                                      s=s)
-
-            print('after WindowAttention2DTime shape: ', hidden_states.shape)
-            hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
-
-            print('after window_reverse shape: ', hidden_states.shape)
-
-            if height_pad > 0 or width_pad > 0:
-                hidden_states = hidden_states[:, :H, :W, :].contiguous()
-
-            print('after capping to image shape: ', hidden_states.shape)
-
-            if shift_size > 0:
-                hidden_states = torch.roll(hidden_states, shifts=(shift_size, shift_size),
-                                                   dims=(1, 2))
-
-            hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
-
-        return hidden_states
 
 class PosEmbMLPSwinv2D(nn.Module):
     """
@@ -553,7 +394,7 @@ class PosEmbMLPSwinv2D(nn.Module):
                  pretrained_window_size: list[int],
                  num_heads: int,
                  no_log=False,
-                 use_relative_physical=True):
+                 use_relative_physical=False):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
@@ -578,7 +419,7 @@ class PosEmbMLPSwinv2D(nn.Module):
         """
         print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
               '; local_window_size',local_window_size)
-        if self.use_relative_physical:
+        if not self.use_relative_physical:
             relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
             relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
 
@@ -735,6 +576,7 @@ class WindowAttention2DTime(nn.Module):
         proj_drop=0.0,
         resolution: int = 0,
         attn_type='v2',
+        use_relative_physical=False
     ):
         super().__init__()
         """
@@ -875,6 +717,7 @@ class PDEBlock(nn.Module):
         last=False,
         do_propagation=False,
         carrier_token_active=True,
+        use_relative_physical=False
     ):
         super().__init__()
         """
@@ -1062,6 +905,167 @@ class PDEBlock(nn.Module):
 
         return x, ct
 
+class PDEStage(nn.Module):
+    """
+    This represents one 'stage' of the U net architecture of PDE-T.
+    This stage can consist of multiple transformer encoder/decoder layers depending on
+    what the depth parameter is set as.
+    """
+    def __init__(
+        self, dim: int, depth: int,
+            num_heads: int, window_size: int,
+            periodic=False, carrier_token_active: bool = True,
+            mlp_ratio: float = 4.0,
+            drop_path: float = 0.0,
+            use_relative_physical=False
+    ):
+        print('PDEStage initialised')
+        super().__init__()
+
+        self.dim = dim
+        blocks = []
+        for i in range(depth):
+
+            block = PDEBlock(
+                dim=dim,
+                num_heads=num_heads,
+                window_size=window_size,
+                mlp_ratio=mlp_ratio,
+                carrier_token_active=carrier_token_active,
+                drop_path=drop_path,
+            )
+            blocks.append(block)
+
+        self.blocks = nn.ModuleList(blocks)
+        self.periodic = periodic
+        self.window_size = window_size
+
+        self.shift_size = window_size // 2
+
+        self.carrier_token_active = carrier_token_active
+
+        if self.carrier_token_active:
+            self.global_tokenizer = TokenInitializer(dim,
+                                                     window_size)
+
+
+    def maybe_pad(self, hidden_states, height, width):
+        """
+        Pads the input tensor to make sure whole number of windows fit
+        """
+        pad_right = (self.window_size - width % self.window_size) % self.window_size
+        pad_bottom = (self.window_size - height % self.window_size) % self.window_size
+        pad_values = (0, 0, 0, pad_right, 0, pad_bottom)
+        hidden_states = nn.functional.pad(hidden_states, pad_values)
+        return hidden_states, pad_values
+
+    def get_attn_mask(self, shift_size, height, width, dtype, device):
+
+        if height < self.window_size or width < self.window_size:
+            return None
+
+        if self.shift_size > 0 and not self.periodic:
+
+            # calculate attention mask for shifted window multihead self attention
+            img_mask = torch.zeros((1, height, width, 1), dtype=dtype, device=device)
+            height_slices = (
+                slice(0, -self.window_size),
+                slice(-self.window_size, -self.shift_size),
+                slice(-self.shift_size, None),
+            )
+            width_slices = (
+                slice(0, -self.window_size),
+                slice(-self.window_size, -self.shift_size),
+                slice(-self.shift_size, None),
+            )
+            count = 0
+            for height_slice in height_slices:
+                for width_slice in width_slices:
+                    img_mask[:, height_slice, width_slice, :] = count
+                    count += 1
+
+            mask_windows = window_partition(img_mask, self.window_size)
+            mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        else:
+
+            attn_mask = None
+        return attn_mask
+
+    def forward(self,
+                hidden_states: torch.Tensor,
+                cond: Optional[torch.Tensor] = None,
+                timestep: Optional[torch.LongTensor] = None,
+                class_labels: Optional[torch.LongTensor] = None,
+                s: Optional[torch.Tensor] = None):
+        """
+
+        Args:
+            hidden_states: input tensor to the forward pass
+            cond:
+            timestep:
+            class_labels:
+            s: (A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
+
+        Returns:
+
+        """
+
+        B, C, H, W = hidden_states.shape
+        print('In PDEStage, shape of tensor:', hidden_states.shape)
+
+        # precompute attention mask
+        attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H, W, hidden_states.dtype,
+                                                   hidden_states.device)
+
+        for n, block in enumerate(self.blocks):
+
+            shift_size = 0 if n % 2 == 0 else self.window_size // 2
+
+            # channels last
+            hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
+
+            if shift_size > 0:
+                attn_mask = attn_mask_precomputed
+                shifted_hidden_states = torch.roll(hidden_states, shifts=(-shift_size, -shift_size),
+                                                   dims=(1, 2))
+            else:
+                attn_mask = None
+                shifted_hidden_states = hidden_states
+
+            shifted_hidden_states, pad_values = self.maybe_pad(shifted_hidden_states, H, W)
+            _, height_pad, width_pad, _ = shifted_hidden_states.shape
+            print('after padding shape: ',shifted_hidden_states.shape)
+            if self.carrier_token_active:
+                ct = self.global_tokenizer(hidden_states)
+            else:
+                ct = None
+
+            hidden_states = window_partition(shifted_hidden_states, self.window_size)
+
+            hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
+                                      attn_mask=attn_mask,
+                                      s=s)
+
+            print('after WindowAttention2DTime shape: ', hidden_states.shape)
+            hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
+
+            print('after window_reverse shape: ', hidden_states.shape)
+
+            if height_pad > 0 or width_pad > 0:
+                hidden_states = hidden_states[:, :H, :W, :].contiguous()
+
+            print('after capping to image shape: ', hidden_states.shape)
+
+            if shift_size > 0:
+                hidden_states = torch.roll(hidden_states, shifts=(shift_size, shift_size),
+                                                   dims=(1, 2))
+
+            hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
+
+        return hidden_states
+
 class ConditionedEncoder2DBlock(nn.Module):
 
     def __init__(self,
@@ -1242,6 +1246,7 @@ class PDEImpl(nn.Module):
             periodic=True,
             carrier_token_active: bool = False,
             allow_downsampling: bool = False,
+            use_relative_physical=False
             **kwargs
     ):
         super().__init__()
@@ -1268,6 +1273,8 @@ class PDEImpl(nn.Module):
             "periodic": periodic,
             'carrier_token_active': carrier_token_active,
             'mlp_ratio': mlp_ratio,
+            'use_relative_physical': use_relative_physical
+
         }
 
         if patch_size is not None:
