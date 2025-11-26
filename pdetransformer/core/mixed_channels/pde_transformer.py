@@ -409,7 +409,6 @@ class PosEmbMLPSwinv2D(nn.Module):
 
         self.use_relative_physical = use_relative_physical
         self.pos_emb = None
-        print('use_relative_physical',use_relative_physical)
 
     def forward(self, input_tensor, local_window_size, s):
 
@@ -473,7 +472,14 @@ class PosEmbMLPSwinv2D(nn.Module):
             self.pos_emb = relative_position_bias.unsqueeze(0)
         else: # use the relative physical position, assumes availability of correct s matrix
             print('OOPSS ><><')
-            print('s.shape:\n',s.shape)
+            print('s.shape:',s.shape)
+
+            # fold tensor into window partitions:
+            _, height, width = s.shape
+            s = s.view(
+                2, height // window[0], window[0], width // window[1], window[1]
+            ).permute(0, 1, 3, 2, 4).reshape(2, -1, window[0]*window[1])
+            print('s.shape:',s.shape)
 
         input_tensor += self.pos_emb
         print('positional embedding to be added shape:', self.pos_emb.shape)
@@ -597,6 +603,8 @@ class WindowAttention2DTime(nn.Module):
         self.scale = qk_scale or head_dim**-0.5
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
+
+        self.use_relative_physical = use_relative_physical
 
         self.pos_emb_funct = PosEmbMLPSwinv2D(
             window_size=[resolution, resolution],
