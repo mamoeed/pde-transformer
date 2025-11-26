@@ -1246,7 +1246,7 @@ class PDEImpl(nn.Module):
             periodic=True,
             carrier_token_active: bool = False,
             allow_downsampling: bool = False,
-            use_relative_physical=False
+            use_relative_physical=False,
             **kwargs
     ):
         super().__init__()
