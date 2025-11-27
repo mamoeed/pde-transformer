@@ -460,7 +460,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
             relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
 
-            print('relative_position_bias.shape',relative_position_bias.shape)
+            # print('relative_position_bias.shape',relative_position_bias.shape)
 
             n_global_feature = input_tensor.shape[2] - local_window_size
 
