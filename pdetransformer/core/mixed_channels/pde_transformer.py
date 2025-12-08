@@ -480,7 +480,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
             print('s.shape after view:',s.shape)
 
-            relative_position_bias = (s[:, :, None, :] - s[:, :, :, None]).permute(0, 2, 3, 4, 1)
+            relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
 
             print('shape before mlp:', relative_position_bias.shape)
             relative_position_bias = self.cpb_mlp(relative_position_bias.to(input_tensor.device)).permute(0,1,4,2,3)
