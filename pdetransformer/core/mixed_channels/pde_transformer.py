@@ -474,7 +474,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             # print('s.shape:',s.shape)
 
             # fold physical positions tensor into window partitions:
-            _, height, width = s.shape
+            _, _, height, width = s.shape
             s = s.view(
                 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
             ).permute(0, 1, 3, 2, 4).reshape(2, -1, self.window_size[0]*self.window_size[1])
