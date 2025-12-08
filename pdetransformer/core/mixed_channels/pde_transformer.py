@@ -483,8 +483,9 @@ class PosEmbMLPSwinv2D(nn.Module):
             relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
 
             print('shape before mlp:', relative_position_bias.shape)
-            relative_position_bias = self.cpb_mlp(relative_position_bias.to(input_tensor.device)).permute(0,1,4,2,3)
+            relative_position_bias = self.cpb_mlp(relative_position_bias.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
             print('shape after mlp:', relative_position_bias.shape)
+
             # ASSUME ONLY 1 sample per batch for now!!! plsss :'(
             # num_batches = int(input_tensor.shape[0] / s.shape[1])
             # print('num_batches:', num_batches)
