@@ -416,8 +416,8 @@ class PosEmbMLPSwinv2D(nn.Module):
         TODO: this function must recompute relative_coords_table and relative_position_index
                 based on current forward passinput
         """
-        print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
-              '; local_window_size',local_window_size, '; s.shape:',s.shape)
+        # print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
+        #       '; local_window_size',local_window_size, '; s.shape:',s.shape)
         if not self.use_relative_physical:
             relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
             relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
@@ -478,13 +478,13 @@ class PosEmbMLPSwinv2D(nn.Module):
             s = s.view(
                 N, 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
             ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
-            print('s.shape after view:',s.shape)
+            # print('s.shape after view:',s.shape)
 
             relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
 
-            print('shape before mlp:', relative_position_bias.shape)
+            # print('shape before mlp:', relative_position_bias.shape)
             relative_position_bias = self.cpb_mlp(relative_position_bias.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
-            print('shape after mlp:', relative_position_bias.shape)
+            # print('shape after mlp:', relative_position_bias.shape)
 
             # ASSUME ONLY 1 sample per batch for now!!! plsss :'(
             # num_batches = int(input_tensor.shape[0] / s.shape[1])
