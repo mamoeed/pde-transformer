@@ -452,8 +452,8 @@ class PosEmbMLPSwinv2D(nn.Module):
             relative_position_index = relative_coords.sum(-1).int()
 
             # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
-            print('grid. shape before mlp:',relative_coords_table.shape)
-            print('before mlp, mean:', relative_coords_table.mean(),'; stdev:', relative_coords_table.std())
+            # print('grid. shape before mlp:',relative_coords_table.shape)
+            # print('before mlp, mean:', relative_coords_table.mean(),'; stdev:', relative_coords_table.std())
 
             relative_position_bias_table = self.cpb_mlp(relative_coords_table.to(input_tensor.device)).view(-1, self.num_heads)
             relative_position_bias = relative_position_bias_table[relative_position_index.view(-1)].view(
@@ -484,8 +484,8 @@ class PosEmbMLPSwinv2D(nn.Module):
 
             relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
             relative_position_bias = relative_position_bias/relative_position_bias.std()
-            print('physical. shape before mlp:', relative_position_bias.shape)
-            print('before mlp, mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
+            # print('physical. shape before mlp:', relative_position_bias.shape)
+            # print('before mlp, mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
 
             relative_position_bias = self.cpb_mlp(relative_position_bias.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
             # print('shape after mlp:', relative_position_bias.shape)
