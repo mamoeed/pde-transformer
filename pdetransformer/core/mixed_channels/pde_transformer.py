@@ -483,7 +483,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             # print('s.shape after view:',s.shape)
 
             relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
-
+            relative_position_bias = relative_position_bias/relative_position_bias.std()
             print('physical. shape before mlp:', relative_position_bias.shape)
             print('before mlp, mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
 
