@@ -377,6 +377,81 @@ class AdaLayerNormZero(nn.Module):
         msa_shift, msa_scale, msa_gate, mlp_shift, mlp_scale, mlp_gate = emb.chunk(6, dim=1)
         return msa_shift, msa_scale, msa_gate, mlp_shift, mlp_scale, mlp_gate
 
+class PosEmbFourierMLPSwinv2D(nn.Module):
+    """
+    Used by WindowAttention2DTime class
+
+    This class modifies the simple coordinate based input to MLP with
+    fourier features and a larger MLP.
+    """
+
+    def __init__(self,
+                 window_size: list[int],
+                 pretrained_window_size: list[int],
+                 num_heads: int,
+                 sigma=5.0,
+                 mapping_size=8,
+                 use_relative_physical=False):
+        super().__init__()
+
+        self.window_size = [int(ws) for ws in window_size]
+        self.num_heads = num_heads
+
+        input_dim = 2 * mapping_size
+        self.register_buffer('B', torch.randn(mapping_size, 2) * sigma)
+
+        self.cpb_mlp = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.GELU(),
+            nn.Linear(128, 128),
+            nn.GELU(),
+            nn.Linear(128, num_heads)
+        )
+
+
+        self.pretrained_window_size = pretrained_window_size
+        self.no_log = no_log
+
+        self.use_relative_physical = use_relative_physical
+        self.pos_emb = None
+
+    def forward(self, input_tensor, s):
+
+        """
+        TODO: this function must recompute relative_coords_table and relative_position_index
+                based on current forward passinput
+        """
+        print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
+              '; local_window_size',local_window_size, '; s.shape:',s.shape)
+
+        print('s.shape:',s.shape)
+
+
+        # fold physical positions tensor into window partitions:
+        N, _, height, width = s.shape
+        s = s.view(
+            N, 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
+        ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
+        print('s.shape after view:',s.shape)
+
+        relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
+        relative_position_bias = relative_position_bias/relative_position_bias.std()
+
+        print('shape after relative differences:', relative_position_bias.shape)
+        print('mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
+
+        proj = 2 * np.pi * (relative_position_bias @ self.B.t())
+        x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+
+        print('shape before mlp:', x_emb.shape)
+
+        relative_position_bias = self.cpb_mlp(x_emb.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
+        print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
+
+        # input_tensor += self.pos_emb
+        input_tensor += relative_position_bias
+        # print('positional embedding to be added shape:', self.pos_emb.shape)
+        return input_tensor
 
 class PosEmbMLPSwinv2D(nn.Module):
     """
@@ -489,15 +564,6 @@ class PosEmbMLPSwinv2D(nn.Module):
 
             relative_position_bias = self.cpb_mlp(relative_position_bias.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
             # print('shape after mlp:', relative_position_bias.shape)
-
-            # ASSUME ONLY 1 sample per batch for now!!! plsss :'(
-            # num_batches = int(input_tensor.shape[0] / s.shape[1])
-            # print('num_batches:', num_batches)
-            # relative_position_bias = relative_position_bias.unsqueeze(0)
-            # relative_position_bias = relative_position_bias.expand(num_batches,-1,-1,-1,-1)
-
-            # print('relative_position_bias.shape',relative_position_bias.shape)
-            # self.pos_emb = relative_position_bias
 
         # input_tensor += self.pos_emb
         input_tensor += relative_position_bias
@@ -625,12 +691,20 @@ class WindowAttention2DTime(nn.Module):
 
         self.use_relative_physical = use_relative_physical
 
-        self.pos_emb_funct = PosEmbMLPSwinv2D(
-            window_size=[resolution, resolution],
-            pretrained_window_size=[resolution, resolution],
-            num_heads=num_heads,
-            use_relative_physical=use_relative_physical
-        )
+        if use_relative_physical:
+            self.pos_emb_funct = PosEmbFourierMLPSwinv2D(
+                window_size=[resolution, resolution],
+                pretrained_window_size=[resolution, resolution],
+                num_heads=num_heads,
+                use_relative_physical=use_relative_physical
+            )
+        else:
+            self.pos_emb_funct = PosEmbMLPSwinv2D(
+                window_size=[resolution, resolution],
+                pretrained_window_size=[resolution, resolution],
+                num_heads=num_heads,
+                use_relative_physical=use_relative_physical
+            )
         self.attn_type = attn_type
 
         if attn_type == 'v2':
