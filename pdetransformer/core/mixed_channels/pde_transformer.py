@@ -421,7 +421,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                 based on current forward passinput
         """
         print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
-              '; local_window_size',local_window_size, '; s.shape:',s.shape)
+              '; s.shape:',s.shape)
 
         print('s.shape:',s.shape)
 
