@@ -730,7 +730,7 @@ class WindowAttention2DTime(nn.Module):
             logit_scale = torch.clamp(self.logit_scale, max=4.6052).exp()
             attn = attn * logit_scale
 
-        if use_relative_physical:
+        if self.use_relative_physical:
             attn = self.pos_emb_funct(attn, s=s)
         else:
             attn = self.pos_emb_funct(attn, self.resolution ** 2, s=s)
