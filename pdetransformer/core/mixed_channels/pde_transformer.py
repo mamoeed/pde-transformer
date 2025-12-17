@@ -420,7 +420,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         TODO: this function must recompute relative_coords_table and relative_position_index
                 based on current forward passinput
         """
-        print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
+        print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
               '; local_window_size',local_window_size, '; s.shape:',s.shape)
 
         print('s.shape:',s.shape)
@@ -691,6 +691,7 @@ class WindowAttention2DTime(nn.Module):
         self.use_relative_physical = use_relative_physical
 
         if use_relative_physical:
+            print('setting up PosEmbFourierMLPSwinv2D')
             self.pos_emb_funct = PosEmbFourierMLPSwinv2D(
                 window_size=[resolution, resolution],
                 pretrained_window_size=[resolution, resolution],
