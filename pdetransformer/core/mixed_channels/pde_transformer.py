@@ -410,7 +410,6 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
 
         self.pretrained_window_size = pretrained_window_size
-        self.no_log = no_log
 
         self.use_relative_physical = use_relative_physical
         self.pos_emb = None
