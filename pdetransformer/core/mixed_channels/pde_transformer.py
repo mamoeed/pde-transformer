@@ -400,19 +400,19 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         input_dim = 2 * mapping_size
 
         # log spaced fourier features
-
+        half_dim = mapping_size // 2
         # log space base =2
         start_scale = 0.0
         end_scale = np.log2(sigma)
 
-        freqs_x = torch.logspace(start_scale, end_scale, steps=mapping_size, base=2.0)
-        freqs_y = torch.logspace(start_scale, end_scale, steps=mapping_size, base=2.0)
+        freqs_x = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
+        freqs_y = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
 
         # Construct B: shape (mapping_size, 2)
 
-        B_log = torch.zeros(input_dim, 2)
-        B_log[:mapping_size, 0] = freqs_x
-        B_log[mapping_size:, 1] = freqs_y
+        B_log = torch.zeros(mapping_size, 2)
+        B_log[:half_dim, 0] = freqs_x
+        B_log[half_dim:, 1] = freqs_y
 
         self.register_buffer('B', B_log)
         # ------------------------------------------
