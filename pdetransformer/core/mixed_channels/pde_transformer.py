@@ -389,7 +389,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  window_size: list[int],
                  pretrained_window_size: list[int],
                  num_heads: int,
-                 sigma=5.0,
+                 sigma=2000,
                  mapping_size=12,
                  use_relative_physical=False):
         super().__init__()
@@ -403,7 +403,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
         # log space base =2
         start_scale = 0.0
-        end_scale = np.log2(sigma) if sigma > 1 else 1.0
+        end_scale = np.log2(sigma)
 
         freqs_x = torch.logspace(start_scale, end_scale, steps=mapping_size, base=2.0)
         freqs_y = torch.logspace(start_scale, end_scale, steps=mapping_size, base=2.0)
