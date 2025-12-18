@@ -390,7 +390,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  pretrained_window_size: list[int],
                  num_heads: int,
                  sigma=5.0,
-                 mapping_size=8,
+                 mapping_size=12,
                  use_relative_physical=False):
         super().__init__()
 
@@ -398,7 +398,24 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         self.num_heads = num_heads
 
         input_dim = 2 * mapping_size
-        self.register_buffer('B', torch.randn(mapping_size, 2) * sigma)
+
+        # log spaced fourier features
+
+        # log space base =2
+        start_scale = 0.0
+        end_scale = np.log2(sigma) if sigma > 1 else 1.0
+
+        freqs_x = torch.logspace(start_scale, end_scale, steps=mapping_size, base=2.0)
+        freqs_y = torch.logspace(start_scale, end_scale, steps=mapping_size, base=2.0)
+
+        # Construct B: shape (mapping_size, 2)
+
+        B_log = torch.zeros(input_dim, 2)
+        B_log[:mapping_size, 0] = freqs_x
+        B_log[mapping_size:, 1] = freqs_y
+
+        self.register_buffer('B', B_log)
+        # ------------------------------------------
 
         self.cpb_mlp = nn.Sequential(
             nn.Linear(input_dim, 128),
