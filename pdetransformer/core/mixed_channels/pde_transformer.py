@@ -452,7 +452,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
         relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
         relative_position_bias = relative_position_bias/relative_position_bias.std()
-        B.to(input_tensor.device)
+        self.B.to(input_tensor.device)
         relative_position_bias.to(input_tensor.device)
         # print('shape after relative differences:', relative_position_bias.shape)
         # print('mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
