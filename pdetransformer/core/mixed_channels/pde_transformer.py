@@ -1142,8 +1142,12 @@ class PDEStage(nn.Module):
         B, C, H, W = hidden_states.shape
         # print('In PDEStage, shape of tensor:', hidden_states.shape)
 
+        pad_right = (self.window_size - W % self.window_size) % self.window_size
+        pad_bottom = (self.window_size - H % self.window_size) % self.window_size
+        H_pad = H + pad_bottom
+        W_pad = W + pad_right
         # precompute attention mask
-        attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H, W, hidden_states.dtype,
+        attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H_pad, W_pad, hidden_states.dtype,
                                                    hidden_states.device)
 
         if self.use_relative_physical:
