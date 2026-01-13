@@ -562,7 +562,8 @@ class PosEmbMLPSwinv2D(nn.Module):
             # print('relative_position_bias.shape',relative_position_bias.shape)
 
             n_global_feature = input_tensor.shape[2] - local_window_size
-            print('relative_position_bias shape after mlp before padding:',relative_position_bias.shape)
+
+            print('relative_position_bias shape after mlp before padding:',relative_position_bias.shape,'\nn_global_feature:',n_global_feature)
             relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
                                                                                       0,
                                                                                       n_global_feature,
