@@ -463,7 +463,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
         x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
-        print('before mlp x_emb[0]:\n',x_emb[0],'\nx_emb.shape:', x_emb.shape)
+        print('before mlp x_emb.permute(0,1,4,2,3).flatten(0,1)[0]:\n',x_emb.permute(0,1,4,2,3).flatten(0,1)[0],'\nx_emb.permute(0,1,4,2,3).flatten(0,1).shape:', x_emb.permute(0,1,4,2,3).flatten(0,1).shape)
 
         relative_position_bias = self.cpb_mlp(x_emb.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
         # print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
