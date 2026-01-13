@@ -459,7 +459,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         relative_position_bias.to(input_tensor.device)
         # print('shape after relative differences:', relative_position_bias.shape)
         # print('mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
-        print('after relative differences relative_position_bias[0]:\n',relative_position_bias[0],'\nrelative_position_bias.shape:', relative_position_bias.shape)
+        print('after relative differences raw relative_position_bias[0]:\n',(s[:, :, :, None, :] - s[:, :, :, :, None])[0],'\nrelative_position_bias.shape:', (s[:, :, :, None, :] - s[:, :, :, :, None]).shape)
         proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
         x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
