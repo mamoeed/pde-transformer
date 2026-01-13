@@ -390,7 +390,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  pretrained_window_size: list[int],
                  num_heads: int,
                  sigma=2000,
-                 mapping_size=12,
+                 mapping_size=1,
                  use_relative_physical=False):
         super().__init__()
 
@@ -441,7 +441,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         #       '; s.shape:',s.shape)
         #
         # print('s.shape:',s.shape)
-        print('positional embedding matrix in forward PosEmbFourier: s[0]=',s[0],'\ns.shape',s.shape)
+        print('positional embedding matrix in forward PosEmbFourier: s[0]=\n',s[0],'\ns.shape',s.shape)
 
 
         # fold physical positions tensor into window partitions:
@@ -463,12 +463,12 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
         x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
-        print('shape before mlp x_emb[0]:',x_emb[0],'\nx_emb.shape:', x_emb.shape)
+        print('before mlp x_emb[0]:\n',x_emb[0],'\nx_emb.shape:', x_emb.shape)
 
         relative_position_bias = self.cpb_mlp(x_emb.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
         # print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
         
-        print('relative position bias in forward PosEmbFourier: relative_position_bias[0]=',relative_position_bias[0],'\nrelative_position_bias.shape',relative_position_bias.shape)
+        print('after MLP relative position bias relative_position_bias[0]=\n',relative_position_bias[0],'\nrelative_position_bias.shape',relative_position_bias.shape)
         
 
         # input_tensor += self.pos_emb
