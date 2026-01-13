@@ -390,7 +390,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  pretrained_window_size: list[int],
                  num_heads: int,
                  sigma=2000,
-                 mapping_size=1,
+                 mapping_size=2,
                  use_relative_physical=False):
         super().__init__()
 
