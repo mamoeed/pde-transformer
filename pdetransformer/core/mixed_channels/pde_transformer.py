@@ -549,7 +549,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             relative_position_index = relative_coords.sum(-1).int()
 
             # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
-            print('grid. shape before mlp:',relative_coords_table.shape)
+            print('relative_coords_table shape before mlp:',relative_coords_table.shape)
             # print('before mlp, mean:', relative_coords_table.mean(),'; stdev:', relative_coords_table.std())
 
             relative_position_bias_table = self.cpb_mlp(relative_coords_table.to(input_tensor.device)).view(-1, self.num_heads)
@@ -562,12 +562,12 @@ class PosEmbMLPSwinv2D(nn.Module):
             # print('relative_position_bias.shape',relative_position_bias.shape)
 
             n_global_feature = input_tensor.shape[2] - local_window_size
-
+            print('relative_position_bias shape after mlp before padding:',relative_position_bias.shape)
             relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
                                                                                       0,
                                                                                       n_global_feature,
                                                                                       0)).contiguous()
-            print('grid shape after mlp before adding:',relative_coords_table.shape)
+            print('relative_position_bias shape after padding before adding:',relative_position_bias.shape)
             self.pos_emb = relative_position_bias.unsqueeze(0)
         else: # use the relative physical position, assumes availability of correct s matrix
             # print('s.shape:',s.shape)
