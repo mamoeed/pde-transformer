@@ -467,8 +467,9 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
         relative_position_bias = self.cpb_mlp(x_emb.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
         # print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
-
-        print('shape after mlp before adding:', x_emb.shape)
+        
+        print('relative position bias in forward PosEmbFourier: relative_position_bias[0]=',relative_position_bias[0],'\nrelative_position_bias.shape',relative_position_bias.shape)
+        
 
         # input_tensor += self.pos_emb
         input_tensor += relative_position_bias
@@ -569,6 +570,7 @@ class PosEmbMLPSwinv2D(nn.Module):
                                                                                       n_global_feature,
                                                                                       0)).contiguous()
             print('relative_position_bias shape after padding before adding:',relative_position_bias.shape)
+            print('relative_position_bias[0]= ',relative_position_bias[0])
             self.pos_emb = relative_position_bias.unsqueeze(0)
         else: # use the relative physical position, assumes availability of correct s matrix
             # print('s.shape:',s.shape)
