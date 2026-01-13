@@ -441,6 +441,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         #       '; s.shape:',s.shape)
         #
         # print('s.shape:',s.shape)
+        print('positional embedding matrix in forward PosEmbFourier: s[0]=',s[0],'\ns.shape',s.shape)
 
 
         # fold physical positions tensor into window partitions:
@@ -462,10 +463,12 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
         x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
-        # print('shape before mlp:', x_emb.shape)
+        print('shape before mlp:', x_emb.shape)
 
         relative_position_bias = self.cpb_mlp(x_emb.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
         # print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
+
+        print('shape after mlp before adding:', x_emb.shape)
 
         # input_tensor += self.pos_emb
         input_tensor += relative_position_bias
@@ -546,7 +549,7 @@ class PosEmbMLPSwinv2D(nn.Module):
             relative_position_index = relative_coords.sum(-1).int()
 
             # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
-            # print('grid. shape before mlp:',relative_coords_table.shape)
+            print('grid. shape before mlp:',relative_coords_table.shape)
             # print('before mlp, mean:', relative_coords_table.mean(),'; stdev:', relative_coords_table.std())
 
             relative_position_bias_table = self.cpb_mlp(relative_coords_table.to(input_tensor.device)).view(-1, self.num_heads)
@@ -564,7 +567,7 @@ class PosEmbMLPSwinv2D(nn.Module):
                                                                                       0,
                                                                                       n_global_feature,
                                                                                       0)).contiguous()
-
+            print('grid shape after mlp before adding:',relative_coords_table.shape)
             self.pos_emb = relative_position_bias.unsqueeze(0)
         else: # use the relative physical position, assumes availability of correct s matrix
             # print('s.shape:',s.shape)
@@ -1154,11 +1157,12 @@ class PDEStage(nn.Module):
 
         if self.use_relative_physical:
             # pad the relative physical positions `s` to make windows fit
+            # TODO: EDIT! dont do this here, it will mess up relative distance computation in pos emb
             pad_right = (self.window_size - W % self.window_size) % self.window_size
             pad_bottom = (self.window_size - H % self.window_size) % self.window_size
             pad_values = (0, pad_right, 0, pad_bottom)
             s = nn.functional.pad(s, pad_values)
-
+            print('positional embedding matrix in PDEStage: s[0]=',s[0],'\ns.shape',s.shape)
         for n, block in enumerate(self.blocks):
 
             shift_size = 0 if n % 2 == 0 else self.window_size // 2
