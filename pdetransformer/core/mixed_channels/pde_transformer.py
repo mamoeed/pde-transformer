@@ -381,8 +381,8 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
     """
     Used by WindowAttention2DTime class
 
-    This class modifies the simple coordinate based input to MLP with
-    fourier features and a larger MLP.
+    This class modifies the original `PosEmbMLPSwinv2D` class to use
+    simple coordinate based input to MLP with fourier features and a larger MLP.
     """
 
     def __init__(self,
@@ -451,7 +451,9 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         # print('s.shape after view:',s.shape)
 
         relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
-        relative_position_bias = relative_position_bias/relative_position_bias.std()
+        
+        # why am I dividing by standard deviation? remove ASAP, wtf?
+        # relative_position_bias = relative_position_bias/relative_position_bias.std()
 
         relative_position_bias.to(input_tensor.device)
         # print('shape after relative differences:', relative_position_bias.shape)
