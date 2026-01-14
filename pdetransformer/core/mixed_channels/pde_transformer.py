@@ -441,7 +441,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         #       '; s.shape:',s.shape)
         #
         # print('s.shape:',s.shape)
-        print('positional embedding matrix in forward PosEmbFourier: s[0]=\n',s[0],'\ns.shape',s.shape)
+        # print('positional embedding matrix in forward PosEmbFourier: s[0]=\n',s[0],'\ns.shape',s.shape)
 
 
         # fold physical positions tensor into window partitions:
@@ -459,16 +459,16 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         relative_position_bias.to(input_tensor.device)
         # print('shape after relative differences:', relative_position_bias.shape)
         # print('mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
-        print('after relative differences raw relative_position_bias[0]:\n',(s[:, :, :, None, :] - s[:, :, :, :, None])[0],'\nrelative_position_bias.shape:', (s[:, :, :, None, :] - s[:, :, :, :, None]).shape)
+        # print('after relative differences raw relative_position_bias[0]:\n',(s[:, :, :, None, :] - s[:, :, :, :, None])[0],'\nrelative_position_bias.shape:', (s[:, :, :, None, :] - s[:, :, :, :, None]).shape)
         proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
         x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
-        print('before mlp x_emb.permute(0,1,4,2,3).flatten(0,1)[0]:\n',x_emb.permute(0,1,4,2,3).flatten(0,1)[0],'\nx_emb.permute(0,1,4,2,3).flatten(0,1).shape:', x_emb.permute(0,1,4,2,3).flatten(0,1).shape)
+        # print('before mlp x_emb.permute(0,1,4,2,3).flatten(0,1)[0]:\n',x_emb.permute(0,1,4,2,3).flatten(0,1)[0],'\nx_emb.permute(0,1,4,2,3).flatten(0,1).shape:', x_emb.permute(0,1,4,2,3).flatten(0,1).shape)
 
         relative_position_bias = self.cpb_mlp(x_emb.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
         # print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
         
-        print('after MLP relative position bias relative_position_bias[0]=\n',relative_position_bias[0],'\nrelative_position_bias.shape',relative_position_bias.shape)
+        # print('after MLP relative position bias relative_position_bias[0]=\n',relative_position_bias[0],'\nrelative_position_bias.shape',relative_position_bias.shape)
         
 
         # input_tensor += self.pos_emb
@@ -549,8 +549,9 @@ class PosEmbMLPSwinv2D(nn.Module):
             relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
             relative_position_index = relative_coords.sum(-1).int()
 
+            # print('relative_coords shape before mlp:',relative_coords_table.shape)
             # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
-            print('relative_coords_table shape before mlp:',relative_coords_table.shape)
+            # print('relative_coords_table shape before mlp:',relative_coords_table.shape)
             # print('before mlp, mean:', relative_coords_table.mean(),'; stdev:', relative_coords_table.std())
 
             relative_position_bias_table = self.cpb_mlp(relative_coords_table.to(input_tensor.device)).view(-1, self.num_heads)
@@ -564,13 +565,13 @@ class PosEmbMLPSwinv2D(nn.Module):
 
             n_global_feature = input_tensor.shape[2] - local_window_size
 
-            print('relative_position_bias shape after mlp before padding:',relative_position_bias.shape,'\nn_global_feature:',n_global_feature)
+            # print('relative_position_bias shape after mlp before padding:',relative_position_bias.shape,'\nn_global_feature:',n_global_feature)
             relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
                                                                                       0,
                                                                                       n_global_feature,
                                                                                       0)).contiguous()
-            print('relative_position_bias shape after padding before adding:',relative_position_bias.shape)
-            print('relative_position_bias[0]= ',relative_position_bias[0])
+            # print('relative_position_bias shape after padding before adding:',relative_position_bias.shape)
+            # print('relative_position_bias[0]= ',relative_position_bias[0])
             self.pos_emb = relative_position_bias.unsqueeze(0)
         else: # use the relative physical position, assumes availability of correct s matrix
             # print('s.shape:',s.shape)
@@ -1165,7 +1166,7 @@ class PDEStage(nn.Module):
             pad_bottom = (self.window_size - H % self.window_size) % self.window_size
             pad_values = (0, pad_right, 0, pad_bottom)
             s = nn.functional.pad(s, pad_values)
-            print('positional embedding matrix in PDEStage: s[0]=',s[0],'\ns.shape',s.shape)
+            # print('positional embedding matrix in PDEStage: s[0]=',s[0],'\ns.shape',s.shape)
         for n, block in enumerate(self.blocks):
 
             shift_size = 0 if n % 2 == 0 else self.window_size // 2
