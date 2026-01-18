@@ -471,8 +471,8 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         TODO: this function must recompute relative_coords_table and relative_position_index
                 based on current forward passinput
         """
-        print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
-              '; s.shape:',s.shape)
+        # print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
+        #       '; s.shape:',s.shape)
         #
         # print('s.shape:',s.shape)
         # print('positional embedding matrix in forward PosEmbFourier: s[0]=\n',s[0],'\ns.shape',s.shape)
@@ -483,7 +483,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         s = s.view(
             N, 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
         ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
-        print('s.shape after view:',s.shape)
+        # print('s.shape after view:',s.shape)
 
         relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
         
