@@ -166,6 +166,7 @@ cython_debug/
 
 # Ignore symlinks to dataset directories
 pbdl-datasets-local
+pdetransformer/data/pbdl_dataloader/global_index.json
 
 # Logs and WandB runs
 logs/
