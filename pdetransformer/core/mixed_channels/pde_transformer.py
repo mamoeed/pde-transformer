@@ -88,6 +88,40 @@ def window_reverse(windows, window_size, height, width):
     windows = windows.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, height, width, num_channels)
     return windows
 
+#################################################################
+#       Helpers for spatial 2D rotary position embeddings       #
+#################################################################
+
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+def apply_rotary_pos_emb(q, k, freqs_cos, freqs_sin):
+    q_embed = (q * freqs_cos) + (rotate_half(q) * freqs_sin)
+    k_embed = (k * freqs_cos) + (rotate_half(k) * freqs_sin)
+    return q_embed, k_embed
+def get_2d_rope_freqs(s_windowed, head_dim, base=0.05):
+    dim_half = head_dim // 2
+    
+    inv_freq = 1.0 / (base ** (torch.arange(0, dim_half, 2, device=s_windowed.device).float() / dim_half))
+    
+    pos_x = s_windowed[..., 0]
+    pos_y = s_windowed[..., 1]
+    
+    def calc_freqs_1d(pos, inv_freq):
+        freqs = torch.einsum('bn,d->bnd', pos, inv_freq)
+        return torch.cat([freqs, freqs], dim=-1)
+
+    freqs_x = calc_freqs_1d(pos_x, inv_freq) # (B, N, dim_half)
+    freqs_y = calc_freqs_1d(pos_y, inv_freq) # (B, N, dim_half)
+    
+    # Concatenate to cover the full head_dim
+    freqs = torch.cat([freqs_x, freqs_y], dim=-1) # (B, N, head_dim)
+    freqs = freqs.unsqueeze(1)
+    return freqs.cos(), freqs.sin()
+
+
 #################################################################################
 #               Embedding Layers for Timesteps and Class Labels                 #
 #################################################################################
@@ -391,7 +425,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  num_heads: int,
                  sigma=2000,
                  mapping_size=2,
-                 use_relative_physical=False):
+                 positional_embedding='rel_grid'):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
@@ -428,7 +462,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
         self.pretrained_window_size = pretrained_window_size
 
-        self.use_relative_physical = use_relative_physical
+        self.positional_embedding = positional_embedding
         self.pos_emb = None
 
     def forward(self, input_tensor, s):
@@ -437,8 +471,8 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         TODO: this function must recompute relative_coords_table and relative_position_index
                 based on current forward passinput
         """
-        # print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
-        #       '; s.shape:',s.shape)
+        print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
+              '; s.shape:',s.shape)
         #
         # print('s.shape:',s.shape)
         # print('positional embedding matrix in forward PosEmbFourier: s[0]=\n',s[0],'\ns.shape',s.shape)
@@ -449,7 +483,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         s = s.view(
             N, 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
         ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
-        # print('s.shape after view:',s.shape)
+        print('s.shape after view:',s.shape)
 
         relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
         
@@ -492,7 +526,7 @@ class PosEmbMLPSwinv2D(nn.Module):
                  pretrained_window_size: list[int],
                  num_heads: int,
                  no_log=False,
-                 use_relative_physical=False):
+                 positional_embedding='rel_grid'):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
@@ -505,7 +539,7 @@ class PosEmbMLPSwinv2D(nn.Module):
         self.pretrained_window_size = pretrained_window_size
         self.no_log = no_log
 
-        self.use_relative_physical = use_relative_physical
+        self.positional_embedding = positional_embedding
         self.pos_emb = None
 
     def forward(self, input_tensor, local_window_size, s):
@@ -516,7 +550,7 @@ class PosEmbMLPSwinv2D(nn.Module):
         """
         # print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
         #       '; local_window_size',local_window_size, '; s.shape:',s.shape)
-        if not self.use_relative_physical:
+        if self.positional_embedding == 'rel_grid':
             relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
             relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
 
@@ -573,23 +607,6 @@ class PosEmbMLPSwinv2D(nn.Module):
             # print('relative_position_bias shape after padding before adding:',relative_position_bias.shape)
             # print('relative_position_bias[0]= ',relative_position_bias[0])
             self.pos_emb = relative_position_bias.unsqueeze(0)
-        else: # use the relative physical position, assumes availability of correct s matrix
-            # print('s.shape:',s.shape)
-
-            # fold physical positions tensor into window partitions:
-            N, _, height, width = s.shape
-            s = s.view(
-                N, 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
-            ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
-            # print('s.shape after view:',s.shape)
-
-            relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
-            relative_position_bias = relative_position_bias/relative_position_bias.std()
-            # print('physical. shape before mlp:', relative_position_bias.shape)
-            # print('before mlp, mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
-
-            relative_position_bias = self.cpb_mlp(relative_position_bias.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
-            # print('shape after mlp:', relative_position_bias.shape)
 
         # input_tensor += self.pos_emb
         input_tensor += relative_position_bias
@@ -694,7 +711,7 @@ class WindowAttention2DTime(nn.Module):
         proj_drop=0.0,
         resolution: int = 0,
         attn_type='v2',
-        use_relative_physical=False
+        positional_embedding='rel_grid'
     ):
         super().__init__()
         """
@@ -715,22 +732,22 @@ class WindowAttention2DTime(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
 
-        self.use_relative_physical = use_relative_physical
+        self.positional_embedding = positional_embedding
 
-        if use_relative_physical:
+        if self.positional_embedding == 'rel_phy':
             # print('setting up PosEmbFourierMLPSwinv2D')
             self.pos_emb_funct = PosEmbFourierMLPSwinv2D(
                 window_size=[resolution, resolution],
                 pretrained_window_size=[resolution, resolution],
                 num_heads=num_heads,
-                use_relative_physical=use_relative_physical
+                positional_embedding=positional_embedding
             )
-        else:
+        elif self.positional_embedding == 'rel_grid':
             self.pos_emb_funct = PosEmbMLPSwinv2D(
                 window_size=[resolution, resolution],
                 pretrained_window_size=[resolution, resolution],
                 num_heads=num_heads,
-                use_relative_physical=use_relative_physical
+                positional_embedding=positional_embedding
             )
         self.attn_type = attn_type
 
@@ -740,9 +757,11 @@ class WindowAttention2DTime(nn.Module):
         self.resolution = resolution
 
     def forward(self, x, attn_mask=None, s=None):
-        print('forward of WindowAttention2DTime. x.shape:',x.shape)
+        # print('forward of WindowAttention2DTime. x.shape:',x.shape)
         B, N, C = x.shape
-        
+        # we 'pretend' window are also part of batch in batch training, so B => number of samples in batch x number of windows in one input
+        # N => number of tokens in one window
+        # print('shape of positions: s.shape =',s.shape)
         qkv = (
             self.qkv(x)
             .reshape(B, -1, 3, self.num_heads, C // self.num_heads)
@@ -750,6 +769,33 @@ class WindowAttention2DTime(nn.Module):
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
         # print('q:', q.shape,'k:', k.shape,'v:', v.shape)
+        # B, num_heads, N, C/num_heads
+        
+        if self.positional_embedding == 'rope':
+            # with rope embeddings: rotate the q and k vectors in place
+            #
+            # # 1. Partition s to match the windowed shape of x
+            # s comes in as (Batch_Orig, 2, H, W)
+            # We need to convert it to (Batch_Orig * Num_Windows, Window_Size*Window_Size, 2)
+            # to match q shape (B, num_heads, N, ...) where B is effectively B_orig * Num_Windows      
+            window_size = self.resolution
+            sB, sC, sH, sW = s.shape
+            # Reshape to (B, C, h_wins, window_size, w_wins, window_size)
+            x = s.view(sB, sC, sH // window_size, window_size, sW // window_size, window_size)
+            # Permute to (B, h_wins, w_wins, window_size, window_size, C) to group windows
+            windows = x.permute(0, 2, 4, 3, 5, 1).contiguous()
+            # Merge batch and window dimensions: (B * num_windows, window_size*window_size, 2)
+            s_windowed = windows.view(-1, window_size * window_size, sC)
+            # print('s_windowed.shape:',s_windowed.shape,'s_windowed[0,0]:',s_windowed[0,0])
+
+            # 2. Generate 2D frequencies
+            rope_cos, rope_sin = get_2d_rope_freqs(s_windowed, self.head_dim)
+            # 3. Apply rotation
+            # q, k shape: (B, num_heads, N, head_dim)
+            # rope_cos/sin shape: (B, 1, N, head_dim) - broadcasts over heads
+            q, k = apply_rotary_pos_emb(q, k, rope_cos, rope_sin)
+            # print('shape of rotated q:',q.shape,'rotated k:',k.shape)
+        
         if self.attn_type == 'v1':
             attn = (q @ k.transpose(-2, -1)) * self.scale
 
@@ -758,9 +804,9 @@ class WindowAttention2DTime(nn.Module):
             logit_scale = torch.clamp(self.logit_scale, max=4.6052).exp()
             attn = attn * logit_scale
 
-        if self.use_relative_physical:
+        if self.positional_embedding == 'rel_phy':
             attn = self.pos_emb_funct(attn, s=s)
-        else:
+        elif self.positional_embedding == 'rel_grid':
             attn = self.pos_emb_funct(attn, self.resolution ** 2, s=s)
 
         if attn_mask is not None:
@@ -777,7 +823,7 @@ class WindowAttention2DTime(nn.Module):
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, -1, C)
-
+        # print('exiting windowed attention forward, x.shape:',x.shape)
         return x
 
 class PosEmbMLPSwinv1D(nn.Module):
@@ -851,7 +897,7 @@ class PDEBlock(nn.Module):
         last=False,
         do_propagation=False,
         carrier_token_active=True,
-        use_relative_physical=False
+        positional_embedding='rel_grid'
     ):
         super().__init__()
         """
@@ -886,7 +932,7 @@ class PDEBlock(nn.Module):
             attn_drop=attn_drop,
             proj_drop=drop,
             resolution=window_size,
-            use_relative_physical=use_relative_physical
+            positional_embedding=positional_embedding
         )
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -1052,7 +1098,7 @@ class PDEStage(nn.Module):
             periodic=False, carrier_token_active: bool = True,
             mlp_ratio: float = 4.0,
             drop_path: float = 0.0,
-            use_relative_physical=False
+            positional_embedding='rel_grid'
     ):
         print('PDEStage initialised')
         super().__init__()
@@ -1068,7 +1114,7 @@ class PDEStage(nn.Module):
                 mlp_ratio=mlp_ratio,
                 carrier_token_active=carrier_token_active,
                 drop_path=drop_path,
-                use_relative_physical=use_relative_physical
+                positional_embedding=positional_embedding
             )
             blocks.append(block)
 
@@ -1079,7 +1125,7 @@ class PDEStage(nn.Module):
         self.shift_size = window_size // 2
 
         self.carrier_token_active = carrier_token_active
-        self.use_relative_physical = use_relative_physical
+        self.positional_embedding = positional_embedding
 
         if self.carrier_token_active:
             self.global_tokenizer = TokenInitializer(dim,
@@ -1160,7 +1206,7 @@ class PDEStage(nn.Module):
         attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H_pad, W_pad, hidden_states.dtype,
                                                    hidden_states.device)
 
-        if self.use_relative_physical:
+        if self.positional_embedding == 'rel_phy' or self.positional_embedding == 'rope':
             # pad the relative physical positions `s` to make windows fit
             # TODO: EDIT! dont do this here, it will mess up relative distance computation in pos emb
             pad_right = (self.window_size - W % self.window_size) % self.window_size
@@ -1400,7 +1446,7 @@ class PDEImpl(nn.Module):
             periodic=True,
             carrier_token_active: bool = False,
             allow_downsampling: bool = False,
-            use_relative_physical=False,
+            positional_embedding='rel_grid',
             **kwargs
     ):
         super().__init__()
@@ -1427,7 +1473,7 @@ class PDEImpl(nn.Module):
             "periodic": periodic,
             'carrier_token_active': carrier_token_active,
             'mlp_ratio': mlp_ratio,
-            'use_relative_physical': use_relative_physical
+            'positional_embedding': positional_embedding
 
         }
 
