@@ -740,8 +740,9 @@ class WindowAttention2DTime(nn.Module):
         self.resolution = resolution
 
     def forward(self, x, attn_mask=None, s=None):
-        # print('forward of WindowAttention2DTime. x.shape:',x.shape)
+        print('forward of WindowAttention2DTime. x.shape:',x.shape)
         B, N, C = x.shape
+        
         qkv = (
             self.qkv(x)
             .reshape(B, -1, 3, self.num_heads, C // self.num_heads)
