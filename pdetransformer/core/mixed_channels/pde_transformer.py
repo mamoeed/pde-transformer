@@ -208,6 +208,49 @@ class SimplePatchEmbed(nn.Module):
 
         return x
 
+class PhysicsPatchEmbed(nn.Module):
+    def __init__(self, in_c, embed_dim, patch_size, num_bands=8, bias=True):
+        super().__init__()
+        # 1. Deterministic Frequencies (Log-spaced)
+        # We want frequencies [2^0, 2^1, ..., 2^(num_bands-1)]
+        # Multiplied by PI later. max_res adjusts the scale if needed.
+        bands = 2.0 ** torch.arange(num_bands) 
+        self.register_buffer("bands", bands, persistent=True)
+        
+        # 2. Calculate new input channels
+        # original_physics + (2 coords * num_bands * 2 func(sin/cos))
+        self.fourier_dim = 2 * num_bands * 2
+        total_in_c = in_c + self.fourier_dim
+        
+        # 3. The Patch Embedding Layer
+        self.proj = nn.Conv2d(total_in_c, embed_dim, 
+                              kernel_size=patch_size, stride=patch_size, bias=bias)
+
+    def forward(self, physics_map, coords):
+        """
+        physics_map: (B, C, H, W) - Your physical channels
+        coords:      (B, 2, H, W) - Your X,Y coordinate grids
+        """
+        B, _, H, W = coords.shape
+        
+        # --- Generate Fourier Features ---
+        # coords: (B, 2, H, W) -> unsqueeze to (B, 2, 1, H, W) for broadcasting
+        # bands:  (N)          -> view as      (1, 1, N, 1, 1)
+        # result: (B, 2, N, H, W)
+        freqs = coords.unsqueeze(2) * self.bands.view(1, 1, -1, 1, 1) * np.pi
+        
+        # Apply Sin/Cos and Flatten dimensions
+        # cat along dim 2 implies: [sin_x_b0, cos_x_b0, ..., sin_y_b7, cos_y_b7]
+        emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=2)
+        
+        # Reshape to (B, fourier_dim, H, W) to match Conv2d input
+        emb = emb.view(B, self.fourier_dim, H, W)
+        
+        # --- Concatenate & Patch Embed ---
+        x = torch.cat([physics_map, emb], dim=1) # (B, C+F, H, W)
+        return self.proj(x)
+    
+
 class OverlapPatchEmbed(nn.Module):
     def __init__(self, in_c: int = 3, embed_dim: int = 48, patch_size: int = 4, overlap_size: int = 1,
                  bias:bool = False):
@@ -793,7 +836,7 @@ class WindowAttention2DTime(nn.Module):
             # 3. Apply rotation
             # q, k shape: (B, num_heads, N, head_dim)
             # rope_cos/sin shape: (B, 1, N, head_dim) - broadcasts over heads
-            q, k = apply_rotary_pos_emb(q, k, rope_cos, rope_sin)
+            q, k = apply_rotary_pos_emb(q, k, rope_cos.to(x.device), rope_sin.to(x.device))
             # print('shape of rotated q:',q.shape,'rotated k:',k.shape)
         
         if self.attn_type == 'v1':
@@ -1447,6 +1490,7 @@ class PDEImpl(nn.Module):
             carrier_token_active: bool = False,
             allow_downsampling: bool = False,
             positional_embedding='rel_grid',
+            coord_fourier_feature = False,
             **kwargs
     ):
         super().__init__()
@@ -1465,6 +1509,7 @@ class PDEImpl(nn.Module):
         self.max_hidden_size = max_hidden_size
 
         self.allow_downsampling = allow_downsampling
+        self.coord_fourier_feature = coord_fourier_feature
 
         assert self.max_hidden_size >= hidden_size, f"max_hidden_size {max_hidden_size} must be greater than or equal to hidden_size {hidden_size}."
 
@@ -1478,8 +1523,14 @@ class PDEImpl(nn.Module):
         }
 
         if patch_size is not None:
-            self.x_embedder = SimplePatchEmbed(in_channels, hidden_size, patch_size, bias=True)
-            self.patch_size = patch_size
+            if coord_fourier_feature:
+                self.x_embedder = PhysicsPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
+                self.patch_size = patch_size
+                # code for modifying the patch embedding function to incorporate
+                print('fourier features of coordinates')
+            else:
+                self.x_embedder = SimplePatchEmbed(in_channels, hidden_size, patch_size, bias=True)
+                self.patch_size = patch_size
         else:
             self.x_embedder = OverlapPatchEmbed(in_channels, hidden_size, bias=True)
             self.patch_size = 1
@@ -1612,7 +1663,10 @@ class PDEImpl(nn.Module):
 
         s: (N, A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
         """
-        x = self.x_embedder(x)  # (N, C, H, W)
+        if self.coord_fourier_feature:
+            x = self.x_embedder(x,s)  # (N, C, H, W)
+        else:
+            x = self.x_embedder(x)  # (N, C, H, W)
 
         if t is None:
             t = torch.Tensor([0]).to(x.device)
