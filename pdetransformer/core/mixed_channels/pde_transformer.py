@@ -1090,7 +1090,7 @@ class PDEBlock(nn.Module):
         x_msa = self.norm1(x)
 
         x_msa = x_msa * (1 + msa_scale[:, None]) + msa_shift[:, None]
-
+    
         x_msa = self.attn(x_msa, attn_mask=attn_mask, s=s) # WindowAttention2DTime
         x_msa = x_msa * (1 + msa_gate[:, None])
 
@@ -1252,14 +1252,16 @@ class PDEStage(nn.Module):
         if self.positional_embedding == 'rel_phy' or self.positional_embedding == 'rope':
             # pad the relative physical positions `s` to make windows fit
             # TODO: EDIT! dont do this here, it will mess up relative distance computation in pos emb
+            # SOLUTION: do replication padding and NOT zero padding for coordinates.
             pad_right = (self.window_size - W % self.window_size) % self.window_size
             pad_bottom = (self.window_size - H % self.window_size) % self.window_size
             pad_values = (0, pad_right, 0, pad_bottom)
-            s = nn.functional.pad(s, pad_values)
+            s = nn.functional.pad(s, pad_values) # , mode='replicate'
             # print('positional embedding matrix in PDEStage: s[0]=',s[0],'\ns.shape',s.shape)
         for n, block in enumerate(self.blocks):
-
-            shift_size = 0 if n % 2 == 0 else self.window_size // 2
+            
+            # this manages the window+shifted-window
+            shift_size = 0 if n % 2 == 0 else self.window_size // 2 
 
             # channels last
             hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
