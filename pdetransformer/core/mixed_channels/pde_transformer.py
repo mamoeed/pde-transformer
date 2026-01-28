@@ -3,6 +3,7 @@ from typing import Tuple, Optional, Dict, Any
 
 import torch.nn.functional as F
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint
 from diffusers import ModelMixin, ConfigMixin
 from diffusers.configuration_utils import register_to_config
 from diffusers.models.embeddings import CombinedTimestepLabelEmbeddings
@@ -14,6 +15,7 @@ import math
 import numpy as np
 from timm.models.layers import DropPath
 import torch
+
 
 import matplotlib.pyplot as plt
 
@@ -543,8 +545,40 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
         # print('before mlp x_emb.permute(0,1,4,2,3).flatten(0,1)[0]:\n',x_emb.permute(0,1,4,2,3).flatten(0,1)[0],'\nx_emb.permute(0,1,4,2,3).flatten(0,1).shape:', x_emb.permute(0,1,4,2,3).flatten(0,1).shape)
+        # print('input to MLP shape',x_emb.to(input_tensor.device).shape)
+        
 
-        relative_position_bias = self.cpb_mlp(x_emb.to(input_tensor.device)).permute(0,1,4,2,3).flatten(0,1)
+        x_emb = x_emb.to(input_tensor.device)
+        chunk_size = 1024
+        B, nW, Wh, Ww, C = x_emb.shape
+        x_flat = x_emb.view(-1, C)
+        output_chunks = []
+
+        for i in range(0, x_flat.size(0), chunk_size):
+            chunk_in = x_flat[i : i + chunk_size]
+            
+            if self.training and chunk_in.requires_grad is False and torch.is_grad_enabled():
+                # ensuring check pointing works by setting requires_grad_ True
+                chunk_in.requires_grad_(True)
+
+
+            if self.training:
+                chunk_out = checkpoint.checkpoint(self.cpb_mlp, chunk_in, use_reentrant=False)
+            else:
+                chunk_out = self.cpb_mlp(chunk_in)
+                
+            output_chunks.append(chunk_out)
+
+        x_out_flat = torch.cat(output_chunks, dim=0)
+
+        #  original shape (B, nW, Wh, Ww, Num_Heads)
+        x_out = x_out_flat.view(B, nW, Wh, Ww, -1)
+
+        
+        relative_position_bias = x_out.permute(0, 1, 4, 2, 3).flatten(0, 1)
+
+
+        # relative_position_bias = self.cpb_mlp().permute(0,1,4,2,3).flatten(0,1)
         # print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
         
         # print('after MLP relative position bias relative_position_bias[0]=\n',relative_position_bias[0],'\nrelative_position_bias.shape',relative_position_bias.shape)
