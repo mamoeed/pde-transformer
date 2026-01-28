@@ -15,6 +15,8 @@ import numpy as np
 from timm.models.layers import DropPath
 import torch
 
+import matplotlib.pyplot as plt
+
 from .udit import FinalLayer, precompute_freqs_cis_2d, apply_rotary_emb
 
 ###############################
@@ -799,7 +801,7 @@ class WindowAttention2DTime(nn.Module):
 
         self.resolution = resolution
 
-    def forward(self, x, attn_mask=None, s=None):
+    def forward(self, x, attn_mask=None, padding_attn_mask=None, s=None):
         # print('forward of WindowAttention2DTime. x.shape:',x.shape)
         B, N, C = x.shape
         # we 'pretend' window are also part of batch in batch training, so B => number of samples in batch x number of windows in one input
@@ -837,7 +839,7 @@ class WindowAttention2DTime(nn.Module):
             # q, k shape: (B, num_heads, N, head_dim)
             # rope_cos/sin shape: (B, 1, N, head_dim) - broadcasts over heads
             q, k = apply_rotary_pos_emb(q, k, rope_cos.to(x.device), rope_sin.to(x.device))
-            # print('shape of rotated q:',q.shape,'rotated k:',k.shape)
+            print('shape of rotated q:',q.shape,'rotated k:',k.shape)
         
         if self.attn_type == 'v1':
             attn = (q @ k.transpose(-2, -1)) * self.scale
@@ -852,7 +854,30 @@ class WindowAttention2DTime(nn.Module):
         elif self.positional_embedding == 'rel_grid':
             attn = self.pos_emb_funct(attn, self.resolution ** 2, s=s)
 
+        # TODO: APPLY additional masking for padded area here if rope or rel_phy
+        
+
+
         if attn_mask is not None:
+            # print('attn_mask.shape:',attn_mask.shape)
+
+            if padding_attn_mask is not None and (self.positional_embedding == 'rope' or self.positional_embedding == 'rel_phy'):
+                # print('applying mask to padding')
+                # pad_mask_shape = padding_attn_mask.shape[0]
+                # attn = attn.view(
+                #     B // pad_mask_shape, pad_mask_shape, self.num_heads, N, N
+                # ) + padding_attn_mask.unsqueeze(1).unsqueeze(0)
+                # attn = attn + padding_attn_mask.unsqueeze(1).unsqueeze(0)
+                # attn = attn.view(-1, self.num_heads, N, N)
+                # print('attn_mask[0].shape:',attn_mask[0].shape)
+                # plt.imshow(attn_mask[2].cpu())
+                # plt.colorbar()
+                # plt.show()
+                
+                attn_mask += padding_attn_mask
+                # plt.imshow(attn_mask[2].cpu())
+                # plt.colorbar()
+                # plt.show()
 
             # Apply the attention mask is (precomputed for all layers in PDE forward() function)
             mask_shape = attn_mask.shape[0]
@@ -861,6 +886,9 @@ class WindowAttention2DTime(nn.Module):
             ) + attn_mask.unsqueeze(1).unsqueeze(0)
             attn = attn + attn_mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
+            # print('attn_mask.shape:',attn_mask.shape)
+
+        
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -1026,6 +1054,7 @@ class PDEBlock(nn.Module):
                 class_labels: Optional[torch.LongTensor] = None,
                 emb: Optional[torch.LongTensor] = None,
                 attn_mask: Optional[torch.Tensor] = None,
+                padding_attn_mask: Optional[torch.Tensor] = None,
                 s: Optional[torch.Tensor] = None):
 
         B, H, W, N = x.shape
@@ -1091,7 +1120,7 @@ class PDEBlock(nn.Module):
 
         x_msa = x_msa * (1 + msa_scale[:, None]) + msa_shift[:, None]
     
-        x_msa = self.attn(x_msa, attn_mask=attn_mask, s=s) # WindowAttention2DTime
+        x_msa = self.attn(x_msa, attn_mask=attn_mask, padding_attn_mask=padding_attn_mask, s=s) # WindowAttention2DTime
         x_msa = x_msa * (1 + msa_gate[:, None])
 
         x = x + self.drop_path(x_msa)
@@ -1186,7 +1215,6 @@ class PDEStage(nn.Module):
         return hidden_states, pad_values
 
     def get_attn_mask(self, shift_size, height, width, dtype, device):
-
         if height < self.window_size or width < self.window_size:
             return None
 
@@ -1214,9 +1242,24 @@ class PDEStage(nn.Module):
             mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
             attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
             attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+            
         else:
 
             attn_mask = None
+        return attn_mask
+    
+    def get_padding_attn_mask(self, orig_height, orig_width, pad_height, pad_width, dtype, device):
+        ones = torch.ones((1,orig_height, orig_width,1), dtype=dtype, device=device)
+        paddedones = 1-self.maybe_pad(ones,orig_height, orig_width)[0]
+        mask_windows = window_partition(paddedones, self.window_size)
+        
+        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+        attn_mask = mask_windows.unsqueeze(1) - 2*mask_windows.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        # for p in range(attn_mask.shape[0]):
+        #     plt.imshow(attn_mask[p].cpu())
+        #     plt.colorbar()
+        #     plt.show()
         return attn_mask
 
     def forward(self,
@@ -1246,8 +1289,9 @@ class PDEStage(nn.Module):
         H_pad = H + pad_bottom
         W_pad = W + pad_right
         # precompute attention mask
-        attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H_pad, W_pad, hidden_states.dtype,
-                                                   hidden_states.device)
+        attn_mask_precomputed = self.get_attn_mask(self.window_size // 2, H_pad, W_pad, hidden_states.dtype,hidden_states.device)
+
+        padding_attn_mask = self.get_padding_attn_mask( H, W, H_pad, W_pad, hidden_states.dtype,hidden_states.device)
 
         if self.positional_embedding == 'rel_phy' or self.positional_embedding == 'rope':
             # pad the relative physical positions `s` to make windows fit
@@ -1256,7 +1300,7 @@ class PDEStage(nn.Module):
             pad_right = (self.window_size - W % self.window_size) % self.window_size
             pad_bottom = (self.window_size - H % self.window_size) % self.window_size
             pad_values = (0, pad_right, 0, pad_bottom)
-            s = nn.functional.pad(s, pad_values) # , mode='replicate'
+            s = nn.functional.pad(s, pad_values , mode='replicate') # , mode='replicate'
             # print('positional embedding matrix in PDEStage: s[0]=',s[0],'\ns.shape',s.shape)
         for n, block in enumerate(self.blocks):
             
@@ -1277,8 +1321,7 @@ class PDEStage(nn.Module):
             shifted_hidden_states, pad_values = self.maybe_pad(shifted_hidden_states, H, W)
             _, height_pad, width_pad, _ = shifted_hidden_states.shape
             # print('after padding shape: ',shifted_hidden_states.shape)
-
-
+            # print('after padding shifted_hidden_states[0,:,:,1]: ',shifted_hidden_states[0,:,:,1])
 
             if self.carrier_token_active:
                 ct = self.global_tokenizer(hidden_states)
@@ -1287,10 +1330,12 @@ class PDEStage(nn.Module):
 
             hidden_states = window_partition(shifted_hidden_states, self.window_size)
 
+
             # print('before PDEBlock forward called, shape: ', hidden_states.shape)
 
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
                                       attn_mask=attn_mask,
+                                      padding_attn_mask=padding_attn_mask,
                                       s=s)
 
             # print('after PDEBlock returned, shape: ', hidden_states.shape)
