@@ -552,7 +552,6 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         chunk_size = 559872
         B, nW, Wh, Ww, C = x_emb.shape
         x_flat = x_emb.view(-1, C)
-        print('x_flat.shape:',x_flat.shape)
         output_chunks = []
 
         for i in range(0, x_flat.size(0), chunk_size):
