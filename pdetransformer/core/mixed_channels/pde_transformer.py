@@ -471,7 +471,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  pretrained_window_size: list[int],
                  num_heads: int,
                  sigma=2000,
-                 mapping_size=2,
+                 mapping_size=4,
                  positional_embedding='rel_grid'):
         super().__init__()
 
