@@ -873,7 +873,7 @@ class WindowAttention2DTime(nn.Module):
             # q, k shape: (B, num_heads, N, head_dim)
             # rope_cos/sin shape: (B, 1, N, head_dim) - broadcasts over heads
             q, k = apply_rotary_pos_emb(q, k, rope_cos.to(x.device), rope_sin.to(x.device))
-            print('shape of rotated q:',q.shape,'rotated k:',k.shape)
+            # print('shape of rotated q:',q.shape,'rotated k:',k.shape)
         
         if self.attn_type == 'v1':
             attn = (q @ k.transpose(-2, -1)) * self.scale
