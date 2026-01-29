@@ -549,7 +549,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         
 
         x_emb = x_emb.to(input_tensor.device)
-        chunk_size = 16384
+        chunk_size = 16384*4
         B, nW, Wh, Ww, C = x_emb.shape
         x_flat = x_emb.view(-1, C)
         output_chunks = []
