@@ -472,30 +472,35 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  num_heads: int,
                  sigma=2000,
                  mapping_size=4,
+                 use_fourier_relative = False,
                  positional_embedding='rel_grid'):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
         self.num_heads = num_heads
+        self.use_fourier_relative = use_fourier_relative
 
-        input_dim = 2 * mapping_size
+        if use_fourier_relative:
+            input_dim = 2 * mapping_size
 
-        # log spaced fourier features
-        half_dim = mapping_size // 2
-        # log space base =2
-        start_scale = 0.0
-        end_scale = np.log2(sigma)
+            # log spaced fourier features
+            half_dim = mapping_size // 2
+            # log space base =2
+            start_scale = 0.0
+            end_scale = np.log2(sigma)
 
-        freqs_x = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
-        freqs_y = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
+            freqs_x = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
+            freqs_y = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
 
-        # Construct B: shape (mapping_size, 2)
+            # Construct B: shape (mapping_size, 2)
 
-        B_log = torch.zeros(mapping_size, 2)
-        B_log[:half_dim, 0] = freqs_x
-        B_log[half_dim:, 1] = freqs_y
+            B_log = torch.zeros(mapping_size, 2)
+            B_log[:half_dim, 0] = freqs_x
+            B_log[half_dim:, 1] = freqs_y
 
-        self.register_buffer('B', B_log)
+            self.register_buffer('B', B_log)
+        else:
+            input_dim = 2
         # ------------------------------------------
 
         self.cpb_mlp = nn.Sequential(
@@ -527,7 +532,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
         # fold physical positions tensor into window partitions:
         N, _, height, width = s.shape
-        s = s.view(
+        s = s.contiguous().view(
             N, 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
         ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
         # print('s.shape after view:',s.shape)
@@ -537,21 +542,24 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         # why am I dividing by standard deviation? remove ASAP, wtf?
         # relative_position_bias = relative_position_bias/relative_position_bias.std()
 
-        relative_position_bias.to(input_tensor.device)
+        # relative_position_bias.to(input_tensor.device)
         # print('shape after relative differences:', relative_position_bias.shape)
         # print('mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
         # print('after relative differences raw relative_position_bias[0]:\n',(s[:, :, :, None, :] - s[:, :, :, :, None])[0],'\nrelative_position_bias.shape:', (s[:, :, :, None, :] - s[:, :, :, :, None]).shape)
-        proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
-        x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
 
-        # print('before mlp x_emb.permute(0,1,4,2,3).flatten(0,1)[0]:\n',x_emb.permute(0,1,4,2,3).flatten(0,1)[0],'\nx_emb.permute(0,1,4,2,3).flatten(0,1).shape:', x_emb.permute(0,1,4,2,3).flatten(0,1).shape)
-        # print('input to MLP shape',x_emb.to(input_tensor.device).shape)
-        
+        if self.use_fourier_relative:
+            proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
+            x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
+
+            # print('before mlp x_emb.permute(0,1,4,2,3).flatten(0,1)[0]:\n',x_emb.permute(0,1,4,2,3).flatten(0,1)[0],'\nx_emb.permute(0,1,4,2,3).flatten(0,1).shape:', x_emb.permute(0,1,4,2,3).flatten(0,1).shape)
+            # print('input to MLP shape',x_emb.to(input_tensor.device).shape)
+        else:
+            x_emb = relative_position_bias.to(input_tensor.device)
 
         x_emb = x_emb.to(input_tensor.device)
         chunk_size = 16384*4
         B, nW, Wh, Ww, C = x_emb.shape
-        x_flat = x_emb.view(-1, C)
+        x_flat = x_emb.contiguous().view(-1, C)
         output_chunks = []
 
         for i in range(0, x_flat.size(0), chunk_size):
