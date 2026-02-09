@@ -804,7 +804,8 @@ class WindowAttention2DTime(nn.Module):
         proj_drop=0.0,
         resolution: int = 0,
         attn_type='v2',
-        positional_embedding='rel_grid'
+        positional_embedding='rel_grid',
+        use_fourier_relative = False
     ):
         super().__init__()
         """
@@ -833,7 +834,8 @@ class WindowAttention2DTime(nn.Module):
                 window_size=[resolution, resolution],
                 pretrained_window_size=[resolution, resolution],
                 num_heads=num_heads,
-                positional_embedding=positional_embedding
+                positional_embedding=positional_embedding,
+                use_fourier_relative = use_fourier_relative
             )
         elif self.positional_embedding == 'rel_grid':
             self.pos_emb_funct = PosEmbMLPSwinv2D(
@@ -1018,7 +1020,8 @@ class PDEBlock(nn.Module):
         last=False,
         do_propagation=False,
         carrier_token_active=True,
-        positional_embedding='rel_grid'
+        positional_embedding='rel_grid',
+        use_fourier_relative = False
     ):
         super().__init__()
         """
@@ -1053,7 +1056,8 @@ class PDEBlock(nn.Module):
             attn_drop=attn_drop,
             proj_drop=drop,
             resolution=window_size,
-            positional_embedding=positional_embedding
+            positional_embedding=positional_embedding,
+            use_fourier_relative = use_fourier_relative
         )
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -1220,7 +1224,8 @@ class PDEStage(nn.Module):
             periodic=False, carrier_token_active: bool = True,
             mlp_ratio: float = 4.0,
             drop_path: float = 0.0,
-            positional_embedding='rel_grid'
+            positional_embedding='rel_grid',
+            use_fourier_relative = False
     ):
         print('PDEStage initialised')
         super().__init__()
@@ -1236,7 +1241,8 @@ class PDEStage(nn.Module):
                 mlp_ratio=mlp_ratio,
                 carrier_token_active=carrier_token_active,
                 drop_path=drop_path,
-                positional_embedding=positional_embedding
+                positional_embedding=positional_embedding,
+                use_fourier_relative=use_fourier_relative
             )
             blocks.append(block)
 
@@ -1593,6 +1599,7 @@ class PDEImpl(nn.Module):
             allow_downsampling: bool = False,
             positional_embedding='rel_grid',
             coord_fourier_feature = False,
+            use_fourier_relative = False,
             **kwargs
     ):
         super().__init__()
@@ -1620,7 +1627,8 @@ class PDEImpl(nn.Module):
             "periodic": periodic,
             'carrier_token_active': carrier_token_active,
             'mlp_ratio': mlp_ratio,
-            'positional_embedding': positional_embedding
+            'positional_embedding': positional_embedding,
+            'use_fourier_relative': use_fourier_relative
 
         }
 
