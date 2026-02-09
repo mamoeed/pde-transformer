@@ -251,7 +251,10 @@ class PhysicsPatchEmbed(nn.Module):
         emb = emb.view(B, self.fourier_dim, H, W)
         
         # --- Concatenate & Patch Embed ---
+        print(f"physics_map shape: {physics_map.shape}")
+        print(f"emb shape: {emb.shape}")
         x = torch.cat([physics_map, emb], dim=1) # (B, C+F, H, W)
+        print(f"x shape after concatenation: {x.shape}")
         return self.proj(x)
     
 
@@ -940,6 +943,8 @@ class WindowAttention2DTime(nn.Module):
         return x
 
 class PosEmbMLPSwinv1D(nn.Module):
+    """ only used with carrier token
+    """
     def __init__(self,
                  dim,
                  rank=2,
@@ -1373,17 +1378,17 @@ class PDEStage(nn.Module):
             hidden_states = window_partition(shifted_hidden_states, self.window_size)
 
 
-            # print('before PDEBlock forward called, shape: ', hidden_states.shape)
+            print('before PDEBlock forward called, shape: ', hidden_states.shape)
 
             hidden_states, ct = block(hidden_states, ct, timestep=timestep, class_labels=class_labels, emb=cond,
                                       attn_mask=attn_mask,
                                       padding_attn_mask=padding_attn_mask,
                                       s=s)
 
-            # print('after PDEBlock returned, shape: ', hidden_states.shape)
+            print('after PDEBlock returned, shape: ', hidden_states.shape)
             hidden_states = window_reverse(hidden_states, self.window_size, height_pad, width_pad)
 
-            # print('after window_reverse shape: ', hidden_states.shape)
+            print('after window_reverse shape: ', hidden_states.shape)
 
             if height_pad > 0 or width_pad > 0:
                 hidden_states = hidden_states[:, :H, :W, :].contiguous()
@@ -1397,6 +1402,10 @@ class PDEStage(nn.Module):
             hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
 
         return hidden_states
+
+###################################################
+##### Not used in default settings of PDEImpl #####
+###################################################
 
 class ConditionedEncoder2DBlock(nn.Module):
 
@@ -1553,6 +1562,7 @@ class ConditionedDecoder2D(nn.Module):
             x = self.decompress(x)
 
             return x
+###################################################
 
 class PDEImpl(nn.Module):
     """
@@ -1752,11 +1762,12 @@ class PDEImpl(nn.Module):
 
         s: (N, A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
         """
+        print('input shape:',x.shape)
         if self.coord_fourier_feature:
             x = self.x_embedder(x,s)  # (N, C, H, W)
         else:
             x = self.x_embedder(x)  # (N, C, H, W)
-
+        print('size after x_embedder:',x.shape)
         if t is None:
             t = torch.Tensor([0]).to(x.device)
 
@@ -1784,16 +1795,18 @@ class PDEImpl(nn.Module):
             out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c, s=s)
             residuals_list.append(out_enc_level)
             x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
+            print(f'after encoder {i} + down{i}_{i+1}, shape:',x.shape)
 
         c = emb_list[-1]
         x = self.latent(x, c, s=s)
-
+        print('after latent, shape:',x.shape)
         for i, (residual, emb) in enumerate(zip(residuals_list[1:][::-1], emb_list[1:-1][::-1])):
             # decoder
             x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
             x = torch.cat([x, residual], 1)
             x = self.__getattr__(f"reduce_chan_level{self.num_encoder_layers - i - 1}")(x)
             x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb, s=s)
+            print(f'after up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1} + decoder{self.num_encoder_layers - i - 1}, shape:',x.shape)
 
         if self.allow_downsampling:
             x = self.__getattr__(f"up1_0")(x)
@@ -1802,6 +1815,7 @@ class PDEImpl(nn.Module):
         x = torch.cat([x, residuals_list[0]], 1)
         x = self.__getattr__(f"reduce_chan_level0")(x)
         x = self.__getattr__(f"decoder_level_0")(x, emb_list[1], s=s)
+        print('after up1_0 and decoder_level_0, shape:', x.shape)
 
         # output
         x = self.output(x)
