@@ -237,6 +237,12 @@ class PhysicsPatchEmbed(nn.Module):
         """
         B, _, H, W = coords.shape
         
+        if physics_map.dim() == 5:
+            # If the tensor is 5D: [Batch, TimeSteps, Channels, H, W]
+            physics_map = torch.flatten(physics_map, start_dim=1, end_dim=2)
+            # else it is 4D: [Batch, Channels, H, W]
+        
+
         # --- Generate Fourier Features ---
         # coords: (B, 2, H, W) -> unsqueeze to (B, 2, 1, H, W) for broadcasting
         # bands:  (N)          -> view as      (1, 1, N, 1, 1)
