@@ -903,32 +903,30 @@ class WindowAttention2DTime(nn.Module):
             attn = self.pos_emb_funct(attn, s=s)
         elif self.positional_embedding == 'rel_grid':
             attn = self.pos_emb_funct(attn, self.resolution ** 2, s=s)
-
-        # TODO: APPLY additional masking for padded area here if rope or rel_phy
         
-
-
-        if attn_mask is not None:
-            # print('attn_mask.shape:',attn_mask.shape)
-
-            if padding_attn_mask is not None and (self.positional_embedding == 'rope' or self.positional_embedding == 'rel_phy'):
-                # print('applying mask to padding')
-                # pad_mask_shape = padding_attn_mask.shape[0]
-                # attn = attn.view(
-                #     B // pad_mask_shape, pad_mask_shape, self.num_heads, N, N
-                # ) + padding_attn_mask.unsqueeze(1).unsqueeze(0)
-                # attn = attn + padding_attn_mask.unsqueeze(1).unsqueeze(0)
-                # attn = attn.view(-1, self.num_heads, N, N)
-                # print('attn_mask[0].shape:',attn_mask[0].shape)
-                # plt.imshow(attn_mask[2].cpu())
-                # plt.colorbar()
-                # plt.show()
-                
+        if padding_attn_mask is not None and (self.positional_embedding == 'rope' or self.positional_embedding == 'rel_phy'):
+            # print('applying mask to padding')
+            # pad_mask_shape = padding_attn_mask.shape[0]
+            # attn = attn.view(
+            #     B // pad_mask_shape, pad_mask_shape, self.num_heads, N, N
+            # ) + padding_attn_mask.unsqueeze(1).unsqueeze(0)
+            # attn = attn + padding_attn_mask.unsqueeze(1).unsqueeze(0)
+            # attn = attn.view(-1, self.num_heads, N, N)
+            # print('attn_mask[0].shape:',attn_mask[0].shape)
+            # plt.imshow(attn_mask[2].cpu())
+            # plt.colorbar()
+            # plt.show()
+            if attn_mask is not None:
+                # print('attn_mask.shape:',attn_mask.shape)
                 attn_mask += padding_attn_mask
                 # plt.imshow(attn_mask[2].cpu())
                 # plt.colorbar()
                 # plt.show()
 
+            else:
+                attn_mask = padding_attn_mask
+    
+        if attn_mask is not None:
             # Apply the attention mask is (precomputed for all layers in PDE forward() function)
             mask_shape = attn_mask.shape[0]
             attn = attn.view(
@@ -937,8 +935,6 @@ class WindowAttention2DTime(nn.Module):
             attn = attn + attn_mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
             # print('attn_mask.shape:',attn_mask.shape)
-
-        
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
