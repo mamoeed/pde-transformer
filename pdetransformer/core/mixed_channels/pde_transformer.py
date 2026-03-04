@@ -223,6 +223,9 @@ class GeometricPatchEmbed(nn.Module):
         self.fourier_dim = 2 * num_bands * 2
         self.geom_dim = 5  # det_J (1) + G_elements (3) + Aspect Ratio (1)
         total_in_c = in_c + self.fourier_dim + self.geom_dim
+
+        # applying norm to features because very different scales
+        self.geom_norm = nn.InstanceNorm2d(self.geom_dim, affine=True)
         
         # 3. The 3-Layer Node-Level MLP
         # Using 1x1 Convs to apply the MLP independently to every node in the grid.
@@ -266,6 +269,9 @@ class GeometricPatchEmbed(nn.Module):
         
         # Combine all geometric features: (B, 5, H, W)
         geom_features = torch.cat([det_J, G_elements, aspect_ratio], dim=1)
+
+        geom_features = self.geom_norm(geom_features)
+        
         return geom_features
 
     def forward(self, physics_map, coords):
