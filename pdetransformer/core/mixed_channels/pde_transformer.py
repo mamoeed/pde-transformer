@@ -1811,9 +1811,21 @@ class PDEImpl(nn.Module):
         self.apply(_basic_init)
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.x_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.x_embedder.proj.bias, 0)
+        if self.node_embedding_type == 'geometric':
+            # Iterate through the Sequential block in GeometricPatchEmbed
+            for m in self.x_embedder.mlp:
+                if isinstance(m, nn.Conv2d):
+                    w = m.weight.data
+                    # Flatten the spatial dimensions to initialize like a Linear layer
+                    nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+        else:
+            # Fallback for the older embedder type with only one Conv2d layer named proj
+            w = self.x_embedder.proj.weight.data
+            nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+            if self.x_embedder.proj.bias is not None:
+                nn.init.constant_(self.x_embedder.proj.bias, 0)
 
         for i in range(self.num_encoder_layers):
 
