@@ -212,6 +212,88 @@ class SimplePatchEmbed(nn.Module):
 
         return x
 
+class GeometricPatchEmbed(nn.Module):
+    def __init__(self, in_c, embed_dim, patch_size, num_bands=8, bias=True, hidden_dims=[64,64]):
+        super().__init__()
+        # log spaced frequencies, same as physics patch embed
+        bands = 2.0 ** torch.arange(num_bands) 
+        self.register_buffer("bands", bands, persistent=True)
+        
+        # 2. Calculate new input channels
+        self.fourier_dim = 2 * num_bands * 2
+        self.geom_dim = 5  # det_J (1) + G_elements (3) + Aspect Ratio (1)
+        total_in_c = in_c + self.fourier_dim + self.geom_dim
+        
+        # 3. The 3-Layer Node-Level MLP
+        # Using 1x1 Convs to apply the MLP independently to every node in the grid.
+        # Layer 3 utilizes kernel_size=patch_size to patchify the final node representations.
+        self.mlp = nn.Sequential(
+            # Layer 1: Node-level mixing
+            nn.Conv2d(total_in_c, hidden_dims[0], kernel_size=1, bias=bias),
+            nn.GELU(),
+            # Layer 2: Node-level non-linear representation
+            nn.Conv2d(hidden_dims[0], hidden_dims[1], kernel_size=1, bias=bias),
+            nn.GELU(),
+            # Layer 3: Final projection + Patchification
+            nn.Conv2d(hidden_dims[1], embed_dim, kernel_size=patch_size, stride=patch_size, bias=bias)
+        )
+
+    def _compute_geometric_features(self, coords):
+        """
+        Computes local stretching, shearing, and volume changes of the grid.
+        """
+        # coords shape: (B, 2, H, W) -> Extract x and y
+        x = coords[:, 0, :, :]
+        y = coords[:, 1, :, :]
+        
+        # 1. Compute Jacobian J using central finite differences along topological axes (dim 1 and 2)
+        dx_deta, dx_dxi = torch.gradient(x, dim=(1, 2))
+        dy_deta, dy_dxi = torch.gradient(y, dim=(1, 2))
+        
+        # 2. Compute Jacobian Determinant (Area scaling)
+        det_J = (dx_dxi * dy_deta) - (dx_deta * dy_dxi)
+        det_J = det_J.unsqueeze(1) # (B, 1, H, W)
+        
+        # 3. Compute Metric Tensor elements (G = J^T J)
+        g11 = dx_dxi**2 + dy_dxi**2
+        g22 = dx_deta**2 + dy_deta**2
+        g12 = (dx_dxi * dx_deta) + (dy_dxi * dy_deta)
+        G_elements = torch.stack([g11, g22, g12], dim=1) # (B, 3, H, W)
+        
+        # 4. Compute Aspect Ratio (Anisotropy)
+        aspect_ratio = torch.sqrt(g11 + 1e-8) / torch.sqrt(g22 + 1e-8)
+        aspect_ratio = aspect_ratio.unsqueeze(1) # (B, 1, H, W)
+        
+        # Combine all geometric features: (B, 5, H, W)
+        geom_features = torch.cat([det_J, G_elements, aspect_ratio], dim=1)
+        return geom_features
+
+    def forward(self, physics_map, coords):
+        """
+        physics_map: (B, C, H, W) - Physical state channels
+        coords:      (B, 2, H, W) - Physical X,Y coordinates
+        """
+        B, _, H, W = coords.shape
+        
+        # Flatten time dim into batch dim if necessary
+        if physics_map.dim() == 5:
+            physics_map = torch.flatten(physics_map, start_dim=1, end_dim=2)
+
+        # --- Generate Fourier Features ---
+        freqs = coords.unsqueeze(2) * self.bands.view(1, 1, -1, 1, 1) * np.pi
+        emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=2)
+        emb = emb.view(B, self.fourier_dim, H, W)
+        
+        # --- Generate Geometric Features ---
+        geom_features = self._compute_geometric_features(coords)
+        
+        # --- Concatenate everything at the node level ---
+        # Resulting shape: (B, total_in_c, H, W)
+        x = torch.cat([physics_map, emb, geom_features], dim=1) 
+        
+        # --- Pass through MLP and Patchify ---
+        return self.mlp(x)
+    
 class PhysicsPatchEmbed(nn.Module):
     def __init__(self, in_c, embed_dim, patch_size, num_bands=8, bias=True):
         super().__init__()
@@ -1594,8 +1676,9 @@ class PDEImpl(nn.Module):
             carrier_token_active: bool = False,
             allow_downsampling: bool = False,
             positional_embedding='rel_grid',
-            coord_fourier_feature = False,
-            use_fourier_relative = False,
+            # coord_fourier_feature = False, # fourier features of coordinates concatenated to input
+            use_fourier_relative = False, # fourier features inside relative positinal embedding mlp input
+            node_embedding_type = 'none', # options: 'coord_fourier', 'geometric', 'none'
             **kwargs
     ):
         super().__init__()
@@ -1614,7 +1697,7 @@ class PDEImpl(nn.Module):
         self.max_hidden_size = max_hidden_size
 
         self.allow_downsampling = allow_downsampling
-        self.coord_fourier_feature = coord_fourier_feature
+        self.node_embedding_type = node_embedding_type
 
         assert self.max_hidden_size >= hidden_size, f"max_hidden_size {max_hidden_size} must be greater than or equal to hidden_size {hidden_size}."
 
@@ -1629,11 +1712,15 @@ class PDEImpl(nn.Module):
         }
 
         if patch_size is not None:
-            if coord_fourier_feature:
+            if node_embedding_type == 'coord_fourier':
                 self.x_embedder = PhysicsPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
                 self.patch_size = patch_size
                 # code for modifying the patch embedding function to incorporate
                 print('fourier features of coordinates')
+            elif node_embedding_type == 'geometric':
+                self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
+                self.patch_size = patch_size
+                print('geometric features of coordinates')
             else:
                 self.x_embedder = SimplePatchEmbed(in_channels, hidden_size, patch_size, bias=True)
                 self.patch_size = patch_size
@@ -1770,7 +1857,7 @@ class PDEImpl(nn.Module):
         s: (N, A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
         """
         # print('input shape:',x.shape)
-        if self.coord_fourier_feature:
+        if self.node_embedding_type== 'coord_fourier' or self.node_embedding_type == 'geometric':
             x = self.x_embedder(x,s)  # (N, C, H, W)
         else:
             x = self.x_embedder(x)  # (N, C, H, W)
