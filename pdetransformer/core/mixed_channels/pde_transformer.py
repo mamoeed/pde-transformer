@@ -241,7 +241,7 @@ class GeometricPatchEmbed(nn.Module):
             nn.Conv2d(hidden_dims[1], embed_dim, kernel_size=patch_size, stride=patch_size, bias=bias)
         )
 
-    def _compute_geometric_features(coords):
+    def _compute_geometric_features(self,coords):
         """
         Computes geometric features including local stretching, shearing,
         volume changes, AND directional information of the grid.
