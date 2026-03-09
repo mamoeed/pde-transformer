@@ -221,7 +221,7 @@ class GeometricPatchEmbed(nn.Module):
         
         # 2. Calculate new input channels
         self.fourier_dim = 2 * num_bands * 2
-        self.geom_dim = 5  # det_J (1) + G_elements (3) + Aspect Ratio (1)
+        self.geom_dim = 9  # 9 features explained in _compute_geometric_features below.
         total_in_c = in_c + self.fourier_dim + self.geom_dim
 
         # applying norm to features because very different scales
@@ -241,39 +241,62 @@ class GeometricPatchEmbed(nn.Module):
             nn.Conv2d(hidden_dims[1], embed_dim, kernel_size=patch_size, stride=patch_size, bias=bias)
         )
 
-    def _compute_geometric_features(self, coords):
+    def _compute_geometric_features(coords):
         """
-        Computes local stretching, shearing, and volume changes of the grid.
-        """
-        # coords shape: (B, 2, H, W) -> Extract x and y
-        x = coords[:, 0, :, :]
-        y = coords[:, 1, :, :]
+        Computes geometric features including local stretching, shearing,
+        volume changes, AND directional information of the grid.
         
-        # 1. Compute Jacobian J using central finite differences along topological axes (dim 1 and 2)
+        Input:  coords shape (B, 2, H, W) where coords[:,0] = x, coords[:,1] = y
+        Output: geom_features shape (B, 9, H, W)
+        """
+        x = coords[:, 0, :, :]  # (B, H, W)
+        y = coords[:, 1, :, :]  # (B, H, W)
+        
+        # 1. Jacobian components via finite differences along grid axes
+        #    dim=1 is the i-axis (ξ), dim=2 is the j-axis (η)
         dx_deta, dx_dxi = torch.gradient(x, dim=(1, 2))
         dy_deta, dy_dxi = torch.gradient(y, dim=(1, 2))
         
-        # 2. Compute Jacobian Determinant (Area scaling)
-        det_J = (dx_dxi * dy_deta) - (dx_deta * dy_dxi)
-        det_J = det_J.unsqueeze(1) # (B, 1, H, W)
+        # 2. Jacobian determinant (cell area scaling)
+        det_J = torch.abs(dx_dxi * dy_deta - dx_deta * dy_dxi)
+        log_jac = torch.log(det_J + 1e-8)
+        log_jac = log_jac - log_jac.mean(dim=(-2, -1), keepdim=True)
+        log_jac = log_jac.unsqueeze(1)  # (B, 1, H, W)
         
-        # 3. Compute Metric Tensor elements (G = J^T J)
-        g11 = dx_dxi**2 + dy_dxi**2
-        g22 = dx_deta**2 + dy_deta**2
-        g12 = (dx_dxi * dx_deta) + (dy_dxi * dy_deta)
-        G_elements = torch.stack([g11, g22, g12], dim=1) # (B, 3, H, W)
+        # 3. Edge lengths (equivalent to their sj4 and sk4)
+        ds_xi  = torch.sqrt(dx_dxi**2 + dy_dxi**2 + 1e-8)   # |∂r/∂ξ|
+        ds_eta = torch.sqrt(dx_deta**2 + dy_deta**2 + 1e-8)  # |∂r/∂η|
         
-        # 4. Compute Aspect Ratio (Anisotropy)
-        aspect_ratio = torch.sqrt(g11 + 1e-8) / torch.sqrt(g22 + 1e-8)
-        aspect_ratio = aspect_ratio.unsqueeze(1) # (B, 1, H, W)
+        # 4. Unit normals for ξ-direction faces
+        #    Tangent along ξ is (dx_dxi, dy_dxi), rotate 90° for normal
+        nx_xi = -dy_dxi / ds_xi   # equivalent to their sk1
+        ny_xi =  dx_dxi / ds_xi   # equivalent to their sk3
         
-        # Combine all geometric features: (B, 5, H, W)
-        geom_features = torch.cat([det_J, G_elements, aspect_ratio], dim=1)
-
-        geom_features = self.geom_norm(geom_features)
+        # 5. Unit normals for η-direction faces
+        #    Tangent along η is (dx_deta, dy_deta), rotate -90° for normal
+        nx_eta =  dy_deta / ds_eta  # equivalent to their sj1
+        ny_eta = -dx_deta / ds_eta  # equivalent to their sj3
+        
+        # 6. Non-orthogonality (shear angle between grid lines)
+        cos_angle = (dx_dxi * dx_deta + dy_dxi * dy_deta) / (ds_xi * ds_eta)
+        
+        # 7. Aspect ratio
+        aspect_ratio = ds_xi / ds_eta
+        
+        # Stack everything: (B, 9, H, W)
+        geom_features = torch.stack([
+            log_jac.squeeze(1),  # cell area scaling           (1 channel)
+            nx_xi,               # ξ-face normal, x-component  (1 channel)
+            ny_xi,               # ξ-face normal, y-component  (1 channel)
+            ds_xi,               # ξ-edge length               (1 channel)
+            nx_eta,              # η-face normal, x-component  (1 channel)
+            ny_eta,              # η-face normal, y-component  (1 channel)
+            ds_eta,              # η-edge length               (1 channel)
+            cos_angle,           # grid non-orthogonality       (1 channel)
+            aspect_ratio,        # anisotropy ratio             (1 channel)
+        ], dim=1)
         
         return geom_features
-
     def forward(self, physics_map, coords):
         """
         physics_map: (B, C, H, W) - Physical state channels
