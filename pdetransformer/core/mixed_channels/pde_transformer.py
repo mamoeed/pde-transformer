@@ -916,7 +916,8 @@ class WindowAttention2DTime(nn.Module):
         resolution: int = 0,
         attn_type='v2',
         positional_embedding='rel_grid',
-        use_fourier_relative = False
+        use_fourier_relative = False,
+        jac_attention_scaling=False,
     ):
         super().__init__()
         """
@@ -961,6 +962,10 @@ class WindowAttention2DTime(nn.Module):
             self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((num_heads, 1, 1))), requires_grad=True)
 
         self.resolution = resolution
+        
+        self.jac_attention_scaling = jac_attention_scaling
+        if jac_attention_scaling:
+            self.lambda_geo = nn.Parameter(torch.tensor(0.1), requires_grad=True)
 
     def forward(self, x, attn_mask=None, padding_attn_mask=None, s=None):
         # print('forward of WindowAttention2DTime. x.shape:',x.shape)
@@ -1009,7 +1014,6 @@ class WindowAttention2DTime(nn.Module):
             attn = (F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1))
             logit_scale = torch.clamp(self.logit_scale, max=4.6052).exp()
             attn = attn * logit_scale
-
         if self.positional_embedding == 'rel_phy':
             attn = self.pos_emb_funct(attn, s=s)
         elif self.positional_embedding == 'rel_grid':
@@ -1046,6 +1050,40 @@ class WindowAttention2DTime(nn.Module):
             attn = attn + attn_mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
             # print('attn_mask.shape:',attn_mask.shape)
+
+        if self.jac_attention_scaling and s is not None:
+            # s shape: (B_orig, 2, H, W) but B here is B_orig * num_windows
+            # first computing jacobians
+            x_coord = s[:, 0, :, :]  # (B_orig, H, W)
+            y_coord = s[:, 1, :, :]
+
+            dx_deta, dx_dxi = torch.gradient(x_coord, dim=(1, 2))
+            dy_deta, dy_dxi = torch.gradient(y_coord, dim=(1, 2))
+
+            det_J = torch.abs(dx_dxi * dy_deta - dx_deta * dy_dxi)
+            log_jac = torch.log(det_J + 1e-8)  # (B_orig, H, W)
+            # print('log_jac.shape',log_jac.shape)
+
+            # Window partition the log_jac
+            sB, sH, sW = log_jac.shape
+            window_size = self.resolution
+            log_jac = log_jac.view(sB, sH // window_size, window_size, sW // window_size, window_size)
+            # print('log_jac.shape',log_jac.shape)
+            log_jac = log_jac.permute(0, 1, 3, 2, 4).contiguous()
+            log_jac = log_jac.view(-1, window_size * window_size)  # (B_orig * nW, win_size^2)
+            # print('log_jac.shape',log_jac.shape)
+            
+            # normalizing per window, is it needed?
+            # log_jac = log_jac - log_jac.mean(dim=-1, keepdim=True)
+            # log_jac = log_jac / (log_jac.std(dim=-1, keepdim=True) + 1e-8)
+            # log_jac = log_jac * self.lambda_geo
+
+            # Scale relative to current logit magnitude
+            logit_std = attn.std(dim=-1, keepdim=True).detach()  # detaching from comp graph
+            # print('logit_std',logit_std)
+            log_jac_bias = log_jac[:, None, None, :] * self.lambda_geo * logit_std
+            # print('log_jac_bias',log_jac_bias)
+            attn = attn + log_jac_bias
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -1128,7 +1166,8 @@ class PDEBlock(nn.Module):
         do_propagation=False,
         carrier_token_active=True,
         positional_embedding='rel_grid',
-        use_fourier_relative = False
+        use_fourier_relative = False,
+        jac_attention_scaling=False,
     ):
         super().__init__()
         """
@@ -1164,7 +1203,8 @@ class PDEBlock(nn.Module):
             proj_drop=drop,
             resolution=window_size,
             positional_embedding=positional_embedding,
-            use_fourier_relative = use_fourier_relative
+            use_fourier_relative = use_fourier_relative,
+            jac_attention_scaling=jac_attention_scaling,
         )
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -1332,7 +1372,8 @@ class PDEStage(nn.Module):
             mlp_ratio: float = 4.0,
             drop_path: float = 0.0,
             positional_embedding='rel_grid',
-            use_fourier_relative = False
+            use_fourier_relative = False,
+            jac_attention_scaling = False,
     ):
         print('PDEStage initialised')
         super().__init__()
@@ -1349,7 +1390,8 @@ class PDEStage(nn.Module):
                 carrier_token_active=carrier_token_active,
                 drop_path=drop_path,
                 positional_embedding=positional_embedding,
-                use_fourier_relative=use_fourier_relative
+                use_fourier_relative=use_fourier_relative,
+                jac_attention_scaling=jac_attention_scaling
             )
             blocks.append(block)
 
@@ -1708,6 +1750,7 @@ class PDEImpl(nn.Module):
             # coord_fourier_feature = False, # fourier features of coordinates concatenated to input
             use_fourier_relative = False, # fourier features inside relative positinal embedding mlp input
             node_embedding_type = 'none', # options: 'coord_fourier', 'geometric', 'none'
+            jac_attention_scaling = False,
             **kwargs
     ):
         super().__init__()
@@ -1727,6 +1770,7 @@ class PDEImpl(nn.Module):
 
         self.allow_downsampling = allow_downsampling
         self.node_embedding_type = node_embedding_type
+        self.jac_attention_scaling = jac_attention_scaling
 
         assert self.max_hidden_size >= hidden_size, f"max_hidden_size {max_hidden_size} must be greater than or equal to hidden_size {hidden_size}."
 
@@ -1736,8 +1780,8 @@ class PDEImpl(nn.Module):
             'carrier_token_active': carrier_token_active,
             'mlp_ratio': mlp_ratio,
             'positional_embedding': positional_embedding,
-            'use_fourier_relative': use_fourier_relative
-
+            'use_fourier_relative': use_fourier_relative,
+            'jac_attention_scaling': jac_attention_scaling,
         }
 
         if patch_size is not None:
