@@ -964,8 +964,8 @@ class WindowAttention2DTime(nn.Module):
         self.resolution = resolution
         
         self.jac_attention_scaling = jac_attention_scaling
-        if jac_attention_scaling:
-            self.lambda_geo = nn.Parameter(torch.tensor(0.1), requires_grad=True)
+        # if jac_attention_scaling:
+            # self.lambda_geo = nn.Parameter(torch.tensor(0.1), requires_grad=True)
 
     def forward(self, x, attn_mask=None, padding_attn_mask=None, s=None):
         # print('forward of WindowAttention2DTime. x.shape:',x.shape)
@@ -1075,14 +1075,15 @@ class WindowAttention2DTime(nn.Module):
             
             # normalizing per window, is it needed?
             # log_jac = log_jac - log_jac.mean(dim=-1, keepdim=True)
-            log_jac = log_jac / (log_jac.std(dim=-1, keepdim=True) + 1e-8)
+            # log_jac = log_jac / (log_jac.std(dim=-1, keepdim=True) + 1e-8)
             # log_jac = log_jac * self.lambda_geo
 
             
             # logit_std = attn.std(dim=-1, keepdim=True).detach()  # detaching from comp graph
             # print('logit_std',logit_std)
             # log_jac_bias = log_jac[:, None, None, :] * self.lambda_geo * logit_std
-            log_jac_bias = log_jac * self.lambda_geo
+            # log_jac_bias = log_jac * self.lambda_geo
+            log_jac_bias = log_jac * 1.0
             # print('log_jac_bias',log_jac_bias)
             attn = attn + log_jac_bias[:, None, None, :]
 
