@@ -1976,7 +1976,7 @@ class PDEImpl(nn.Module):
 
         for i, c in enumerate(emb_list[:-1]):
             # encoder
-            out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c, s=s)
+            out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c, s=current_s)
             residuals_list.append(out_enc_level)
             s_list.append(current_s)
             x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
