@@ -1971,22 +1971,31 @@ class PDEImpl(nn.Module):
             emb_list.append(c)
 
         residuals_list = []
+        s_list = []        # store coordinates for decoder skip connections
+        current_s = s      # track downsampled coordinates
+
         for i, c in enumerate(emb_list[:-1]):
             # encoder
             out_enc_level = self.__getattr__(f"encoder_level_{i}")(x, c, s=s)
             residuals_list.append(out_enc_level)
+            s_list.append(current_s)
             x = self.__getattr__(f"down{i}_{i+1}")(out_enc_level)
             # print(f'after encoder {i} + down{i}_{i+1}, shape:',x.shape)
 
+            # coordinate downsampling if applicable
+            if self.allow_downsampling and current_s is not None:
+                # 2x2 average pooling mirrors how tokens are merged spatially
+                current_s = F.avg_pool2d(current_s, kernel_size=2, stride=2)
+
         c = emb_list[-1]
-        x = self.latent(x, c, s=s)
+        x = self.latent(x, c, s=current_s)
         # print('after latent, shape:',x.shape)
-        for i, (residual, emb) in enumerate(zip(residuals_list[1:][::-1], emb_list[1:-1][::-1])):
+        for i, (residual, emb, s_res) in enumerate(zip(residuals_list[1:][::-1], emb_list[1:-1][::-1], s_list[1:][::-1])):
             # decoder
             x = self.__getattr__(f"up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1}")(x)
             x = torch.cat([x, residual], 1)
             x = self.__getattr__(f"reduce_chan_level{self.num_encoder_layers - i - 1}")(x)
-            x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb, s=s)
+            x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb, s=s_res)
             # print(f'after up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1} + decoder{self.num_encoder_layers - i - 1}, shape:',x.shape)
 
         if self.allow_downsampling:
@@ -1995,7 +2004,7 @@ class PDEImpl(nn.Module):
             x = self.__getattr__(f"up1_0")(x)
         x = torch.cat([x, residuals_list[0]], 1)
         x = self.__getattr__(f"reduce_chan_level0")(x)
-        x = self.__getattr__(f"decoder_level_0")(x, emb_list[1], s=s)
+        x = self.__getattr__(f"decoder_level_0")(x, emb_list[1], s=s_list[0])
         # print('after up1_0 and decoder_level_0, shape:', x.shape)
 
         # output
