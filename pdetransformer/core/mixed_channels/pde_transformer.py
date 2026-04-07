@@ -213,11 +213,12 @@ class SimplePatchEmbed(nn.Module):
         return x
 
 class GeometricPatchEmbed(nn.Module):
-    def __init__(self, in_c, embed_dim, patch_size, num_bands=8, bias=True, hidden_dims=[64,64]):
+    def __init__(self, in_c, embed_dim, patch_size, num_bands=8, bias=True, hidden_dims=[64,64],use_fourier=True):
         super().__init__()
         # log spaced frequencies, same as physics patch embed
         bands = 2.0 ** torch.arange(num_bands) 
         self.register_buffer("bands", bands, persistent=True)
+        self.use_fourier = use_fourier
         
         # 2. Calculate new input channels
         self.fourier_dim = 2 * num_bands * 2
@@ -230,6 +231,10 @@ class GeometricPatchEmbed(nn.Module):
         # 3. The 3-Layer Node-Level MLP
         # Using 1x1 Convs to apply the MLP independently to every node in the grid.
         # Layer 3 utilizes kernel_size=patch_size to patchify the final node representations.
+        if self.use_fourier:
+            total_in_c = in_c + self.fourier_dim + self.geom_dim
+        else:
+            total_in_c = in_c + self.geom_dim
         self.mlp = nn.Sequential(
             # Layer 1: Node-level mixing
             nn.Conv2d(total_in_c, hidden_dims[0], kernel_size=1, bias=bias),
@@ -308,17 +313,21 @@ class GeometricPatchEmbed(nn.Module):
         if physics_map.dim() == 5:
             physics_map = torch.flatten(physics_map, start_dim=1, end_dim=2)
 
-        # --- Generate Fourier Features ---
-        freqs = coords.unsqueeze(2) * self.bands.view(1, 1, -1, 1, 1) * np.pi
-        emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=2)
-        emb = emb.view(B, self.fourier_dim, H, W)
+        if self.use_fourier:
+            # --- Generate Fourier Features ---
+            freqs = coords.unsqueeze(2) * self.bands.view(1, 1, -1, 1, 1) * np.pi
+            emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=2)
+            emb = emb.view(B, self.fourier_dim, H, W)
         
         # --- Generate Geometric Features ---
         geom_features = self._compute_geometric_features(coords)
         
         # --- Concatenate everything at the node level ---
         # Resulting shape: (B, total_in_c, H, W)
-        x = torch.cat([physics_map, emb, geom_features], dim=1) 
+        if self.use_fourier:
+            x = torch.cat([physics_map, emb, geom_features], dim=1)
+        else:
+            x = torch.cat([physics_map, geom_features], dim=1)
         
         # --- Pass through MLP and Patchify ---
         return self.mlp(x)
@@ -1796,6 +1805,11 @@ class PDEImpl(nn.Module):
                 self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
                 self.patch_size = patch_size
                 print('geometric features of coordinates')
+            elif node_embedding_type == 'geometric_nofourier':
+                self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True,use_fourier=False)
+                self.patch_size = patch_size
+                print('geometric features of coordinates')
+            
             else:
                 self.x_embedder = SimplePatchEmbed(in_channels, hidden_size, patch_size, bias=True)
                 self.patch_size = patch_size
@@ -1886,7 +1900,7 @@ class PDEImpl(nn.Module):
         self.apply(_basic_init)
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        if self.node_embedding_type == 'geometric':
+        if self.node_embedding_type == 'geometric' or self.node_embedding_type == 'geometric_nofourier':
             # Iterate through the Sequential block in GeometricPatchEmbed
             for m in self.x_embedder.mlp:
                 if isinstance(m, nn.Conv2d):
@@ -1944,7 +1958,7 @@ class PDEImpl(nn.Module):
         s: (N, A, H, W) tensor of physical spatial locations of each 2D point. A=2 for 2D
         """
         # print('input shape:',x.shape)
-        if self.node_embedding_type== 'coord_fourier' or self.node_embedding_type == 'geometric':
+        if self.node_embedding_type in ['coord_fourier', 'geometric', 'geometric_nofourier']:
             x = self.x_embedder(x,s)  # (N, C, H, W)
         else:
             x = self.x_embedder(x)  # (N, C, H, W)
