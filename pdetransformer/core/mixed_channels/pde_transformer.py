@@ -1092,8 +1092,8 @@ class WindowAttention2DTime(nn.Module):
             # print('logit_std',logit_std)
             # log_jac_bias = log_jac[:, None, None, :] * self.lambda_geo * logit_std
             log_jac_bias = log_jac * self.lambda_geo
-            log_jac_bias = log_jac * 1.0
-            print('log_jac_bias',log_jac_bias)
+            # log_jac_bias = log_jac * 1.0
+            # print('log_jac_bias',log_jac_bias)
             attn = attn + log_jac_bias[:, None, None, :]
 
         attn = attn.softmax(dim=-1)
