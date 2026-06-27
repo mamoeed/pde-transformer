@@ -435,21 +435,6 @@ class Downsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class Downsample_FAKE(nn.Module):
-    def __init__(self, n_feat, keep_dim=False):
-        super(Downsample_FAKE, self).__init__()
-
-        if keep_dim:
-            n_feat_out = n_feat
-        else:
-            n_feat_out = n_feat * 2
-
-        self.body = nn.Sequential(
-            nn.Conv2d(n_feat, n_feat_out, kernel_size=3, stride=1, padding=1, bias=False),
-                                )
-
-    def forward(self, x):
-        return self.body(x)
 
 class DownsampleV2(nn.Module):
     def __init__(self, n_feat):
@@ -477,20 +462,6 @@ class Upsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class Upsample_FAKE(nn.Module):
-    def __init__(self, n_feat, keep_dim=False):
-        super(Upsample_FAKE, self).__init__()
-
-        if keep_dim:
-            n_feat_out = n_feat
-        else:
-            n_feat_out = n_feat // 2
-
-        self.body = nn.Sequential(nn.Conv2d(n_feat, n_feat_out, kernel_size=3, stride=1, padding=1, bias=False),
-                                  )
-
-    def forward(self, x):
-        return self.body(x)
 
 class UpsampleV2(nn.Module):
     def __init__(self, n_feat):
@@ -589,7 +560,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
     Used by WindowAttention2DTime class
 
     This class modifies the original `PosEmbMLPSwinv2D` class to use
-    simple coordinate based input to MLP with fourier features and a larger MLP.
+    physical coordinate input to MLP  and a larger MLP.
     """
 
     def __init__(self,
@@ -598,35 +569,13 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
                  num_heads: int,
                  sigma=2000,
                  mapping_size=4,
-                 use_fourier_relative = False,
                  positional_embedding='rel_grid'):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
         self.num_heads = num_heads
-        self.use_fourier_relative = use_fourier_relative
 
-        if use_fourier_relative:
-            input_dim = 2 * mapping_size
-
-            # log spaced fourier features
-            half_dim = mapping_size // 2
-            # log space base =2
-            start_scale = 0.0
-            end_scale = np.log2(sigma)
-
-            freqs_x = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
-            freqs_y = torch.logspace(start_scale, end_scale, steps=half_dim, base=2.0)
-
-            # Construct B: shape (mapping_size, 2)
-
-            B_log = torch.zeros(mapping_size, 2)
-            B_log[:half_dim, 0] = freqs_x
-            B_log[half_dim:, 1] = freqs_y
-
-            self.register_buffer('B', B_log)
-        else:
-            input_dim = 2
+        input_dim = 2
         # ------------------------------------------
 
         self.cpb_mlp = nn.Sequential(
@@ -645,10 +594,6 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
     def forward(self, input_tensor, s):
 
-        """
-        TODO: this function must recompute relative_coords_table and relative_position_index
-                based on current forward passinput
-        """
         # print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
         #       '; s.shape:',s.shape)
         #
@@ -673,14 +618,7 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         # print('mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
         # print('after relative differences raw relative_position_bias[0]:\n',(s[:, :, :, None, :] - s[:, :, :, :, None])[0],'\nrelative_position_bias.shape:', (s[:, :, :, None, :] - s[:, :, :, :, None]).shape)
 
-        if self.use_fourier_relative:
-            proj = 2 * np.pi * (relative_position_bias.to(input_tensor.device) @ self.B.to(input_tensor.device).t())
-            x_emb = torch.cat([torch.sin(proj), torch.cos(proj)], dim=-1)
-
-            # print('before mlp x_emb.permute(0,1,4,2,3).flatten(0,1)[0]:\n',x_emb.permute(0,1,4,2,3).flatten(0,1)[0],'\nx_emb.permute(0,1,4,2,3).flatten(0,1).shape:', x_emb.permute(0,1,4,2,3).flatten(0,1).shape)
-            # print('input to MLP shape',x_emb.to(input_tensor.device).shape)
-        else:
-            x_emb = relative_position_bias.to(input_tensor.device)
+        x_emb = relative_position_bias.to(input_tensor.device)
 
         x_emb = x_emb.to(input_tensor.device)
         chunk_size = 16384*4
@@ -925,7 +863,6 @@ class WindowAttention2DTime(nn.Module):
         resolution: int = 0,
         attn_type='v2',
         positional_embedding='rel_grid',
-        use_fourier_relative = False,
         jac_attention_scaling=False,
     ):
         super().__init__()
@@ -956,7 +893,6 @@ class WindowAttention2DTime(nn.Module):
                 pretrained_window_size=[resolution, resolution],
                 num_heads=num_heads,
                 positional_embedding=positional_embedding,
-                use_fourier_relative = use_fourier_relative
             )
         elif self.positional_embedding == 'rel_grid':
             self.pos_emb_funct = PosEmbMLPSwinv2D(
@@ -1177,7 +1113,6 @@ class PDEBlock(nn.Module):
         do_propagation=False,
         carrier_token_active=True,
         positional_embedding='rel_grid',
-        use_fourier_relative = False,
         jac_attention_scaling=False,
     ):
         super().__init__()
@@ -1214,7 +1149,6 @@ class PDEBlock(nn.Module):
             proj_drop=drop,
             resolution=window_size,
             positional_embedding=positional_embedding,
-            use_fourier_relative = use_fourier_relative,
             jac_attention_scaling=jac_attention_scaling,
         )
 
@@ -1383,7 +1317,6 @@ class PDEStage(nn.Module):
             mlp_ratio: float = 4.0,
             drop_path: float = 0.0,
             positional_embedding='rel_grid',
-            use_fourier_relative = False,
             jac_attention_scaling = False,
     ):
         print('PDEStage initialised')
@@ -1401,7 +1334,6 @@ class PDEStage(nn.Module):
                 carrier_token_active=carrier_token_active,
                 drop_path=drop_path,
                 positional_embedding=positional_embedding,
-                use_fourier_relative=use_fourier_relative,
                 jac_attention_scaling=jac_attention_scaling
             )
             blocks.append(block)
@@ -1737,8 +1669,6 @@ class PDEImpl(nn.Module):
     """
     Diffusion UNet model with a Transformer backbone.
 
-    allow_downsampling: (bool) if set to false, don't downsample tokens, so all layers will have same
-                                number of tokens. Essentially not a U-net architecture anymore.
     """
 
     def __init__(
@@ -1756,10 +1686,7 @@ class PDEImpl(nn.Module):
             num_classes=1000,
             periodic=True,
             carrier_token_active: bool = False,
-            allow_downsampling: bool = False,
             positional_embedding='rel_grid',
-            # coord_fourier_feature = False, # fourier features of coordinates concatenated to input
-            use_fourier_relative = False, # fourier features inside relative positinal embedding mlp input
             node_embedding_type = 'none', # options: 'coord_fourier', 'geometric', 'none'
             jac_attention_scaling = False,
             **kwargs
@@ -1779,7 +1706,6 @@ class PDEImpl(nn.Module):
         self.use_carrier_tokens = carrier_token_active
         self.max_hidden_size = max_hidden_size
 
-        self.allow_downsampling = allow_downsampling
         self.node_embedding_type = node_embedding_type
         self.jac_attention_scaling = jac_attention_scaling
 
@@ -1791,7 +1717,6 @@ class PDEImpl(nn.Module):
             'carrier_token_active': carrier_token_active,
             'mlp_ratio': mlp_ratio,
             'positional_embedding': positional_embedding,
-            'use_fourier_relative': use_fourier_relative,
             'jac_attention_scaling': jac_attention_scaling,
         }
 
@@ -1835,10 +1760,9 @@ class PDEImpl(nn.Module):
                 keep_dim = True
             else:
                 keep_dim = False
-            if allow_downsampling:
-                self.__setattr__(f"down{i}_{i+1}", Downsample(hidden_size_layer, keep_dim=keep_dim))
-            else:
-                self.__setattr__(f"down{i}_{i + 1}", Downsample_FAKE(hidden_size_layer, keep_dim=keep_dim))
+            
+            self.__setattr__(f"down{i}_{i+1}", Downsample(hidden_size_layer, keep_dim=keep_dim))
+            
 
         # latent
         hidden_size_latent = min(hidden_size * 2 ** self.num_encoder_layers, max_hidden_size)
@@ -1853,10 +1777,7 @@ class PDEImpl(nn.Module):
             keep_dim = False
 
         # double hidden size for last decoder layer 0
-        if allow_downsampling:
-            self.__setattr__("up1_0", Upsample(hidden_size_layer0, keep_dim=keep_dim))
-        else:
-            self.__setattr__("up1_0", Upsample_FAKE(hidden_size_layer0, keep_dim=keep_dim))
+        self.__setattr__("up1_0", Upsample(hidden_size_layer0, keep_dim=keep_dim))
         self.__setattr__("reduce_chan_level0", nn.Conv2d(2 * min(hidden_size, max_hidden_size), hidden_size_layer0, kernel_size=1, bias=True))
         self.__setattr__("decoder_level_0", PDEStage(dim=hidden_size_layer0, num_heads=num_heads,
                                         window_size=window_size, depth=depth[self.num_encoder_layers + 1], **dit_stage_args))
@@ -1873,10 +1794,7 @@ class PDEImpl(nn.Module):
                 keep_dim = False
                 hidden_size_upsample = 2 * hidden_size_layer
 
-            if allow_downsampling:
-                self.__setattr__(f"up{i+1}_{i}", Upsample(hidden_size_upsample, keep_dim=keep_dim))
-            else:
-                self.__setattr__(f"up{i + 1}_{i}", Upsample_FAKE(hidden_size_upsample, keep_dim=keep_dim))
+            self.__setattr__(f"up{i+1}_{i}", Upsample(hidden_size_upsample, keep_dim=keep_dim))
             self.__setattr__(f"reduce_chan_level{i}", nn.Conv2d(hidden_size_layer * 2, hidden_size_layer, kernel_size=1, bias=True))
             self.__setattr__(f"decoder_level_{i}", PDEStage(dim=hidden_size_layer, num_heads=num_heads,
                                             window_size=window_size, depth=depth[self.num_encoder_layers - i - 1], **dit_stage_args))
@@ -1997,7 +1915,7 @@ class PDEImpl(nn.Module):
             # print(f'after encoder {i} + down{i}_{i+1}, shape:',x.shape)
 
             # coordinate downsampling if applicable
-            if self.allow_downsampling and current_s is not None:
+            if current_s is not None:
                 # 2x2 average pooling mirrors how tokens are merged spatially
                 current_s = F.avg_pool2d(current_s, kernel_size=2, stride=2)
 
@@ -2012,10 +1930,8 @@ class PDEImpl(nn.Module):
             x = self.__getattr__(f"decoder_level_{self.num_encoder_layers - i - 1}")(x, emb, s=s_res)
             # print(f'after up{self.num_encoder_layers - i}_{self.num_encoder_layers - i - 1} + decoder{self.num_encoder_layers - i - 1}, shape:',x.shape)
 
-        if self.allow_downsampling:
-            x = self.__getattr__(f"up1_0")(x)
-        else:
-            x = self.__getattr__(f"up1_0")(x)
+        x = self.__getattr__(f"up1_0")(x)
+
         x = torch.cat([x, residuals_list[0]], 1)
         x = self.__getattr__(f"reduce_chan_level0")(x)
         x = self.__getattr__(f"decoder_level_0")(x, emb_list[1], s=s_list[0])
