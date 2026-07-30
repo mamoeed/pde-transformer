@@ -212,174 +212,99 @@ class SimplePatchEmbed(nn.Module):
 
         return x
 
+    
 class GeometricPatchEmbed(nn.Module):
-    def __init__(self, in_c, embed_dim, patch_size, num_bands=8, bias=True, hidden_dims=[64,64],use_fourier=True):
+    """
+    Unified patch embedder for deformed structured grids.
+
+    mode:
+      'coord_fourier'      -> physics + fourier, single-conv projection
+      'geometric'          -> physics + fourier + geometric, 3-layer MLP  
+      'geometric_nofourier'-> physics + geometric, 3-layer MLP            
+    """
+    def __init__(self, in_c, embed_dim, patch_size, mode='geometric',
+                 num_bands=8, bias=True, hidden_dims=[64, 64]):
         super().__init__()
-        # log spaced frequencies, same as physics patch embed
-        bands = 2.0 ** torch.arange(num_bands) 
+        assert mode in ('coord_fourier', 'geometric', 'geometric_nofourier')
+        self.mode = mode
+        self.use_fourier = (mode != 'geometric_nofourier')
+        self.use_geom = (mode != 'coord_fourier')
+
+        bands = 2.0 ** torch.arange(num_bands)
         self.register_buffer("bands", bands, persistent=True)
-        self.use_fourier = use_fourier
-        
-        # 2. Calculate new input channels
+
         self.fourier_dim = 2 * num_bands * 2
-        self.geom_dim = 9  # 9 features explained in _compute_geometric_features below.
-        total_in_c = in_c + self.fourier_dim + self.geom_dim
+        self.geom_dim = 9
 
-        # applying norm to features because very different scales
-        self.geom_norm = nn.InstanceNorm2d(self.geom_dim, affine=True)
-        
-        # 3. The 3-Layer Node-Level MLP
-        # Using 1x1 Convs to apply the MLP independently to every node in the grid.
-        # Layer 3 utilizes kernel_size=patch_size to patchify the final node representations.
+        total_in_c = in_c
         if self.use_fourier:
-            total_in_c = in_c + self.fourier_dim + self.geom_dim
-        else:
-            total_in_c = in_c + self.geom_dim
-        self.mlp = nn.Sequential(
-            # Layer 1: Node-level mixing
-            nn.Conv2d(total_in_c, hidden_dims[0], kernel_size=1, bias=bias),
-            nn.GELU(),
-            # Layer 2: Node-level non-linear representation
-            nn.Conv2d(hidden_dims[0], hidden_dims[1], kernel_size=1, bias=bias),
-            nn.GELU(),
-            # Layer 3: Final projection + Patchification
-            nn.Conv2d(hidden_dims[1], embed_dim, kernel_size=patch_size, stride=patch_size, bias=bias)
-        )
+            total_in_c += self.fourier_dim
+        if self.use_geom:
+            total_in_c += self.geom_dim
+            self.geom_norm = nn.InstanceNorm2d(self.geom_dim, affine=True)
 
-    def _compute_geometric_features(self,coords):
-        """
-        Computes geometric features including local stretching, shearing,
-        volume changes, AND directional information of the grid.
-        
-        Input:  coords shape (B, 2, H, W) where coords[:,0] = x, coords[:,1] = y
-        Output: geom_features shape (B, 9, H, W)
-        """
-        x = coords[:, 0, :, :]  # (B, H, W)
-        y = coords[:, 1, :, :]  # (B, H, W)
-        
-        # 1. Jacobian components via finite differences along grid axes
-        #    dim=1 is the i-axis (ξ), dim=2 is the j-axis (η)
+        if self.mode == 'coord_fourier':
+            self.mlp = nn.Conv2d(total_in_c, embed_dim,
+                                 kernel_size=patch_size, stride=patch_size, bias=bias)
+        else:
+            # 3-layer node-level MLP with patchifying final conv
+            self.mlp = nn.Sequential(
+                nn.Conv2d(total_in_c, hidden_dims[0], kernel_size=1, bias=bias),
+                nn.GELU(),
+                nn.Conv2d(hidden_dims[0], hidden_dims[1], kernel_size=1, bias=bias),
+                nn.GELU(),
+                nn.Conv2d(hidden_dims[1], embed_dim,
+                          kernel_size=patch_size, stride=patch_size, bias=bias),
+            )
+
+    def _compute_geometric_features(self, coords):
+        x = coords[:, 0, :, :]
+        y = coords[:, 1, :, :]
+
         dx_deta, dx_dxi = torch.gradient(x, dim=(1, 2))
         dy_deta, dy_dxi = torch.gradient(y, dim=(1, 2))
-        
-        # 2. Jacobian determinant (cell area scaling)
+
         det_J = torch.abs(dx_dxi * dy_deta - dx_deta * dy_dxi)
         log_jac = torch.log(det_J + 1e-8)
         log_jac = log_jac - log_jac.mean(dim=(-2, -1), keepdim=True)
-        log_jac = log_jac.unsqueeze(1)  # (B, 1, H, W)
-        
-        # 3. Edge lengths (equivalent to their sj4 and sk4)
-        ds_xi  = torch.sqrt(dx_dxi**2 + dy_dxi**2 + 1e-8)   # |∂r/∂ξ|
-        ds_eta = torch.sqrt(dx_deta**2 + dy_deta**2 + 1e-8)  # |∂r/∂η|
-        
-        # 4. Unit normals for ξ-direction faces
-        #    Tangent along ξ is (dx_dxi, dy_dxi), rotate 90° for normal
-        nx_xi = -dy_dxi / ds_xi   # equivalent to their sk1
-        ny_xi =  dx_dxi / ds_xi   # equivalent to their sk3
-        
-        # 5. Unit normals for η-direction faces
-        #    Tangent along η is (dx_deta, dy_deta), rotate -90° for normal
-        nx_eta =  dy_deta / ds_eta  # equivalent to their sj1
-        ny_eta = -dx_deta / ds_eta  # equivalent to their sj3
-        
-        # 6. Non-orthogonality (shear angle between grid lines)
+
+        ds_xi  = torch.sqrt(dx_dxi**2 + dy_dxi**2 + 1e-8)
+        ds_eta = torch.sqrt(dx_deta**2 + dy_deta**2 + 1e-8)
+
+        nx_xi = -dy_dxi / ds_xi
+        ny_xi =  dx_dxi / ds_xi
+        nx_eta =  dy_deta / ds_eta
+        ny_eta = -dx_deta / ds_eta
+
         cos_angle = (dx_dxi * dx_deta + dy_dxi * dy_deta) / (ds_xi * ds_eta)
-        
-        # 7. Aspect ratio
         aspect_ratio = ds_xi / ds_eta
-        
-        # Stack everything: (B, 9, H, W)
-        geom_features = torch.stack([
-            log_jac.squeeze(1),  # cell area scaling           (1 channel)
-            nx_xi,               # ξ-face normal, x-component  (1 channel)
-            ny_xi,               # ξ-face normal, y-component  (1 channel)
-            ds_xi,               # ξ-edge length               (1 channel)
-            nx_eta,              # η-face normal, x-component  (1 channel)
-            ny_eta,              # η-face normal, y-component  (1 channel)
-            ds_eta,              # η-edge length               (1 channel)
-            cos_angle,           # grid non-orthogonality       (1 channel)
-            aspect_ratio,        # anisotropy ratio             (1 channel)
+
+        return torch.stack([
+            log_jac, nx_xi, ny_xi, ds_xi,
+            nx_eta, ny_eta, ds_eta, cos_angle, aspect_ratio,
         ], dim=1)
-        
-        return geom_features
+
     def forward(self, physics_map, coords):
-        """
-        physics_map: (B, C, H, W) - Physical state channels
-        coords:      (B, 2, H, W) - Physical X,Y coordinates
-        """
         B, _, H, W = coords.shape
-        
-        # Flatten time dim into batch dim if necessary
+
         if physics_map.dim() == 5:
             physics_map = torch.flatten(physics_map, start_dim=1, end_dim=2)
 
+        feats = [physics_map]
+
         if self.use_fourier:
-            # --- Generate Fourier Features ---
             freqs = coords.unsqueeze(2) * self.bands.view(1, 1, -1, 1, 1) * np.pi
             emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=2)
             emb = emb.view(B, self.fourier_dim, H, W)
-        
-        # --- Generate Geometric Features ---
-        geom_features = self._compute_geometric_features(coords)
-        
-        # --- Concatenate everything at the node level ---
-        # Resulting shape: (B, total_in_c, H, W)
-        if self.use_fourier:
-            x = torch.cat([physics_map, emb, geom_features], dim=1)
-        else:
-            x = torch.cat([physics_map, geom_features], dim=1)
-        
-        # --- Pass through MLP and Patchify ---
+            feats.append(emb)
+
+        if self.use_geom:
+            geom = self._compute_geometric_features(coords)
+            geom = self.geom_norm(geom)   # see note below
+            feats.append(geom)
+
+        x = torch.cat(feats, dim=1)
         return self.mlp(x)
-    
-class PhysicsPatchEmbed(nn.Module):
-    def __init__(self, in_c, embed_dim, patch_size, num_bands=8, bias=True):
-        super().__init__()
-        # 1. Deterministic Frequencies (Log-spaced)
-        # We want frequencies [2^0, 2^1, ..., 2^(num_bands-1)]
-        # Multiplied by PI later. max_res adjusts the scale if needed.
-        bands = 2.0 ** torch.arange(num_bands) 
-        self.register_buffer("bands", bands, persistent=True)
-        
-        # 2. Calculate new input channels
-        # original_physics + (2 coords * num_bands * 2 func(sin/cos))
-        self.fourier_dim = 2 * num_bands * 2
-        total_in_c = in_c + self.fourier_dim
-        
-        # 3. The Patch Embedding Layer
-        self.proj = nn.Conv2d(total_in_c, embed_dim, 
-                              kernel_size=patch_size, stride=patch_size, bias=bias)
-
-    def forward(self, physics_map, coords):
-        """
-        physics_map: (B, C, H, W) - Your physical channels
-        coords:      (B, 2, H, W) - Your X,Y coordinate grids
-        """
-        B, _, H, W = coords.shape
-        
-        if physics_map.dim() == 5:
-            # If the tensor is 5D: [Batch, TimeSteps, Channels, H, W]
-            physics_map = torch.flatten(physics_map, start_dim=1, end_dim=2)
-            # else it is 4D: [Batch, Channels, H, W]
-        
-
-        # --- Generate Fourier Features ---
-        # coords: (B, 2, H, W) -> unsqueeze to (B, 2, 1, H, W) for broadcasting
-        # bands:  (N)          -> view as      (1, 1, N, 1, 1)
-        # result: (B, 2, N, H, W)
-        freqs = coords.unsqueeze(2) * self.bands.view(1, 1, -1, 1, 1) * np.pi
-        
-        # Apply Sin/Cos and Flatten dimensions
-        # cat along dim 2 implies: [sin_x_b0, cos_x_b0, ..., sin_y_b7, cos_y_b7]
-        emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=2)
-        
-        # Reshape to (B, fourier_dim, H, W) to match Conv2d input
-        emb = emb.view(B, self.fourier_dim, H, W)
-        
-        # --- Concatenate & Patch Embed ---
-        x = torch.cat([physics_map, emb], dim=1) # (B, C+F, H, W)
-        return self.proj(x)
-    
 
 class OverlapPatchEmbed(nn.Module):
     def __init__(self, in_c: int = 3, embed_dim: int = 48, patch_size: int = 4, overlap_size: int = 1,
@@ -555,21 +480,18 @@ class AdaLayerNormZero(nn.Module):
         msa_shift, msa_scale, msa_gate, mlp_shift, mlp_scale, mlp_gate = emb.chunk(6, dim=1)
         return msa_shift, msa_scale, msa_gate, mlp_shift, mlp_scale, mlp_gate
 
-class PosEmbFourierMLPSwinv2D(nn.Module):
+class GeoPosEmbMLPSwinv2D(nn.Module):
     """
-    Used by WindowAttention2DTime class
-
+    Used by WindowAttention2DTime class to produce physical positional embeddings.
     This class modifies the original `PosEmbMLPSwinv2D` class to use
-    physical coordinate input to MLP  and a larger MLP.
+    physical coordinate input to MLP. 
     """
 
     def __init__(self,
                  window_size: list[int],
                  pretrained_window_size: list[int],
                  num_heads: int,
-                 sigma=2000,
-                 mapping_size=4,
-                 positional_embedding='rel_grid'):
+                 ):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
@@ -589,16 +511,9 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
 
         self.pretrained_window_size = pretrained_window_size
 
-        self.positional_embedding = positional_embedding
         self.pos_emb = None
 
     def forward(self, input_tensor, s):
-
-        # print('forward of PosEmbFourierMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
-        #       '; s.shape:',s.shape)
-        #
-        # print('s.shape:',s.shape)
-        # print('positional embedding matrix in forward PosEmbFourier: s[0]=\n',s[0],'\ns.shape',s.shape)
 
 
         # fold physical positions tensor into window partitions:
@@ -606,20 +521,13 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         s = s.contiguous().view(
             N, 2, height // self.window_size[0], self.window_size[0], width // self.window_size[1], self.window_size[1]
         ).permute(0, 1, 2, 4, 3, 5).reshape(N, 2, -1, self.window_size[0]*self.window_size[1])
-        # print('s.shape after view:',s.shape)
 
         relative_position_bias = (s[:, :, :, None, :] - s[:, :, :, :, None]).permute(0, 2, 3, 4, 1)
         
-        # why am I dividing by standard deviation? remove ASAP, wtf?
-        # relative_position_bias = relative_position_bias/relative_position_bias.std()
-
-        # relative_position_bias.to(input_tensor.device)
-        # print('shape after relative differences:', relative_position_bias.shape)
-        # print('mean:', relative_position_bias.mean(), '; stdev:', relative_position_bias.std())
-        # print('after relative differences raw relative_position_bias[0]:\n',(s[:, :, :, None, :] - s[:, :, :, :, None])[0],'\nrelative_position_bias.shape:', (s[:, :, :, None, :] - s[:, :, :, :, None]).shape)
 
         x_emb = relative_position_bias.to(input_tensor.device)
 
+        # chunked forward pass of MLP to reduce memory usage
         x_emb = x_emb.to(input_tensor.device)
         chunk_size = 16384*4
         B, nW, Wh, Ww, C = x_emb.shape
@@ -649,35 +557,22 @@ class PosEmbFourierMLPSwinv2D(nn.Module):
         
         relative_position_bias = x_out.permute(0, 1, 4, 2, 3).flatten(0, 1)
 
-
-        # relative_position_bias = self.cpb_mlp().permute(0,1,4,2,3).flatten(0,1)
-        # print('shape after mlp and permutation and flatten:', relative_position_bias.shape)
-        
-        # print('after MLP relative position bias relative_position_bias[0]=\n',relative_position_bias[0],'\nrelative_position_bias.shape',relative_position_bias.shape)
-        
-
-        # input_tensor += self.pos_emb
         input_tensor += relative_position_bias
-        # print('positional embedding to be added shape:', self.pos_emb.shape)
+
         return input_tensor
 
 class PosEmbMLPSwinv2D(nn.Module):
     """
     Used by WindowAttention2DTime class
-
-
     This calculates the SWIN V2 style relative position bias to be added in the attention mechanism.
-    Takes relative positions of all tokens and gives back complete B matrix.
-
-    TODO: this needs to be changed to move to physical relative dist
-
+    Takes relative positions of all tokens in grid coords and gives back complete B matrix.
     """
     def __init__(self,
                  window_size: list[int],
                  pretrained_window_size: list[int],
                  num_heads: int,
-                 no_log=False,
-                 positional_embedding='rel_grid'):
+                 no_log=False
+                 ):
         super().__init__()
 
         self.window_size = [int(ws) for ws in window_size]
@@ -690,78 +585,62 @@ class PosEmbMLPSwinv2D(nn.Module):
         self.pretrained_window_size = pretrained_window_size
         self.no_log = no_log
 
-        self.positional_embedding = positional_embedding
         self.pos_emb = None
 
     def forward(self, input_tensor, local_window_size, s):
 
-        """
-        TODO: this function must recompute relative_coords_table and relative_position_index
-                based on current forward passinput
-        """
-        # print('forward of PosEmbMLPSwinv2D. input arguments, input_tensor',input_tensor.shape,
-        #       '; local_window_size',local_window_size, '; s.shape:',s.shape)
-        if self.positional_embedding == 'rel_grid':
-            relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
-            relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
+        relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
+        relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
 
-            relative_coords_table = torch.stack(
-                torch.meshgrid([relative_coords_h,
-                                relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
+        relative_coords_table = torch.stack(
+            torch.meshgrid([relative_coords_h,
+                            relative_coords_w])).permute(1, 2, 0).contiguous().unsqueeze(0)  # 1, 2*Wh-1, 2*Ww-1, 2
 
-            if self.pretrained_window_size[0] > 0:
-                relative_coords_table[:, :, :, 0] /= (self.pretrained_window_size[0] - 1)
-                relative_coords_table[:, :, :, 1] /= (self.pretrained_window_size[1] - 1)
-            else:
-                relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
-                relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
+        if self.pretrained_window_size[0] > 0:
+            relative_coords_table[:, :, :, 0] /= (self.pretrained_window_size[0] - 1)
+            relative_coords_table[:, :, :, 1] /= (self.pretrained_window_size[1] - 1)
+        else:
+            relative_coords_table[:, :, :, 0] /= (self.window_size[0] - 1)
+            relative_coords_table[:, :, :, 1] /= (self.window_size[1] - 1)
 
-            if not self.no_log:
-                relative_coords_table *= 8  # normalize to -8, 8
-                relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
-                    torch.abs(relative_coords_table) + 1.0) / np.log2(8)
+        if not self.no_log:
+            relative_coords_table *= 8  # normalize to -8, 8
+            relative_coords_table = torch.sign(relative_coords_table) * torch.log2(
+                torch.abs(relative_coords_table) + 1.0) / np.log2(8)
 
-            # self.register_buffer("relative_coords_table", relative_coords_table, persistent=False)
+        # self.register_buffer("relative_coords_table", relative_coords_table, persistent=False)
 
-            coords_h = torch.arange(self.window_size[0])
-            coords_w = torch.arange(self.window_size[1])
-            coords = torch.stack(torch.meshgrid([coords_h, coords_w]))
-            coords_flatten = torch.flatten(coords, 1)
-            relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
-            relative_coords = relative_coords.permute(1, 2, 0).contiguous()
-            relative_coords[:, :, 0] += self.window_size[0] - 1
-            relative_coords[:, :, 1] += self.window_size[1] - 1
-            relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
-            relative_position_index = relative_coords.sum(-1).int()
+        coords_h = torch.arange(self.window_size[0])
+        coords_w = torch.arange(self.window_size[1])
+        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))
+        coords_flatten = torch.flatten(coords, 1)
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
+        relative_coords[:, :, 0] += self.window_size[0] - 1
+        relative_coords[:, :, 1] += self.window_size[1] - 1
+        relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
+        relative_position_index = relative_coords.sum(-1).int()
 
-            # print('relative_coords shape before mlp:',relative_coords_table.shape)
-            # self.register_buffer("relative_position_index", relative_position_index, persistent=False)
-            # print('relative_coords_table shape before mlp:',relative_coords_table.shape)
-            # print('before mlp, mean:', relative_coords_table.mean(),'; stdev:', relative_coords_table.std())
 
-            relative_position_bias_table = self.cpb_mlp(relative_coords_table.to(input_tensor.device)).view(-1, self.num_heads)
-            relative_position_bias = relative_position_bias_table[relative_position_index.view(-1)].view(
-                self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
-                -1)
-            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
-            relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
+        relative_position_bias_table = self.cpb_mlp(relative_coords_table.to(input_tensor.device)).view(-1, self.num_heads)
+        relative_position_bias = relative_position_bias_table[relative_position_index.view(-1)].view(
+            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1],
+            -1)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
+        relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
 
-            # print('relative_position_bias.shape',relative_position_bias.shape)
 
-            n_global_feature = input_tensor.shape[2] - local_window_size
+        n_global_feature = input_tensor.shape[2] - local_window_size
 
-            # print('relative_position_bias shape after mlp before padding:',relative_position_bias.shape,'\nn_global_feature:',n_global_feature)
-            relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
-                                                                                      0,
-                                                                                      n_global_feature,
-                                                                                      0)).contiguous()
-            # print('relative_position_bias shape after padding before adding:',relative_position_bias.shape)
-            # print('relative_position_bias[0]= ',relative_position_bias[0])
-            self.pos_emb = relative_position_bias.unsqueeze(0)
+        relative_position_bias = torch.nn.functional.pad(relative_position_bias, (n_global_feature,
+                                                                                    0,
+                                                                                    n_global_feature,
+                                                                                    0)).contiguous()
+        
+        self.pos_emb = relative_position_bias.unsqueeze(0)
 
-        # input_tensor += self.pos_emb
         input_tensor += relative_position_bias
-        # print('positional embedding to be added shape:', self.pos_emb.shape)
+
         return input_tensor
 
 class CarrierTokenAttention2DTimestep(nn.Module):
@@ -887,19 +766,16 @@ class WindowAttention2DTime(nn.Module):
         self.positional_embedding = positional_embedding
 
         if self.positional_embedding == 'rel_phy':
-            # print('setting up PosEmbFourierMLPSwinv2D')
-            self.pos_emb_funct = PosEmbFourierMLPSwinv2D(
+            self.pos_emb_funct = GeoPosEmbMLPSwinv2D(
                 window_size=[resolution, resolution],
                 pretrained_window_size=[resolution, resolution],
                 num_heads=num_heads,
-                positional_embedding=positional_embedding,
             )
         elif self.positional_embedding == 'rel_grid':
             self.pos_emb_funct = PosEmbMLPSwinv2D(
                 window_size=[resolution, resolution],
                 pretrained_window_size=[resolution, resolution],
                 num_heads=num_heads,
-                positional_embedding=positional_embedding
             )
         self.attn_type = attn_type
 
@@ -913,19 +789,15 @@ class WindowAttention2DTime(nn.Module):
             self.lambda_geo = nn.Parameter(torch.tensor(0.1), requires_grad=True)
 
     def forward(self, x, attn_mask=None, padding_attn_mask=None, s=None):
-        # print('forward of WindowAttention2DTime. x.shape:',x.shape)
         B, N, C = x.shape
         # we 'pretend' window are also part of batch in batch training, so B => number of samples in batch x number of windows in one input
         # N => number of tokens in one window
-        # print('shape of positions: s.shape =',s.shape)
         qkv = (
             self.qkv(x)
             .reshape(B, -1, 3, self.num_heads, C // self.num_heads)
             .permute(2, 0, 3, 1, 4)
         )
         q, k, v = qkv[0], qkv[1], qkv[2]
-        # print('q:', q.shape,'k:', k.shape,'v:', v.shape)
-        # B, num_heads, N, C/num_heads
         
         if self.positional_embedding == 'rope':
             # with rope embeddings: rotate the q and k vectors in place
@@ -994,7 +866,6 @@ class WindowAttention2DTime(nn.Module):
             ) + attn_mask.unsqueeze(1).unsqueeze(0)
             attn = attn + attn_mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
-            # print('attn_mask.shape:',attn_mask.shape)
 
         if self.jac_attention_scaling and s is not None:
             # s shape: (B_orig, 2, H, W) but B here is B_orig * num_windows
@@ -1007,29 +878,21 @@ class WindowAttention2DTime(nn.Module):
 
             det_J = torch.abs(dx_dxi * dy_deta - dx_deta * dy_dxi)
             log_jac = torch.log(det_J + 1e-8)  # (B_orig, H, W)
-            # print('log_jac.shape',log_jac.shape)
+            
 
             # Window partition the log_jac
             sB, sH, sW = log_jac.shape
             window_size = self.resolution
             log_jac = log_jac.view(sB, sH // window_size, window_size, sW // window_size, window_size)
-            # print('log_jac.shape',log_jac.shape)
+            
             log_jac = log_jac.permute(0, 1, 3, 2, 4).contiguous()
             log_jac = log_jac.view(-1, window_size * window_size)  # (B_orig * nW, win_size^2)
-            # print('log_jac.shape',log_jac.shape)
             
             # normalizing per window, is it needed?
             log_jac = log_jac - log_jac.mean(dim=-1, keepdim=True)
-            # log_jac = log_jac / (log_jac.std(dim=-1, keepdim=True) + 1e-8)
-            # log_jac = log_jac * self.lambda_geo
 
-            
-            # logit_std = attn.std(dim=-1, keepdim=True).detach()  # detaching from comp graph
-            # print('logit_std',logit_std)
-            # log_jac_bias = log_jac[:, None, None, :] * self.lambda_geo * logit_std
             log_jac_bias = log_jac * self.lambda_geo
-            # log_jac_bias = log_jac * 1.0
-            # print('log_jac_bias',log_jac_bias)
+            
             attn = attn + log_jac_bias[:, None, None, :]
 
         attn = attn.softmax(dim=-1)
@@ -1721,23 +1584,26 @@ class PDEImpl(nn.Module):
         }
 
         if patch_size is not None:
-            if node_embedding_type == 'coord_fourier':
-                self.x_embedder = PhysicsPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
+            # if node_embedding_type == 'coord_fourier':
+            #     self.x_embedder = PhysicsPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
+            #     self.patch_size = patch_size
+            #     print('fourier features of coordinates')
+            # elif node_embedding_type == 'geometric':
+            #     self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
+            #     self.patch_size = patch_size
+            #     print('geometric features of coordinates')
+            # elif node_embedding_type == 'geometric_nofourier':
+            #     self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True, use_fourier=False)
+            #     self.patch_size = patch_size
+            #     print('geometric features of coordinates')
+            if node_embedding_type in ['coord_fourier', 'geometric','geometric_nofourier']:
+                self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, mode=node_embedding_type, num_bands=8, bias=True)
                 self.patch_size = patch_size
-                # code for modifying the patch embedding function to incorporate
-                print('fourier features of coordinates')
-            elif node_embedding_type == 'geometric':
-                self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True)
-                self.patch_size = patch_size
-                print('geometric features of coordinates')
-            elif node_embedding_type == 'geometric_nofourier':
-                self.x_embedder = GeometricPatchEmbed(in_channels, hidden_size, patch_size, num_bands=8, bias=True,use_fourier=False)
-                self.patch_size = patch_size
-                print('geometric features of coordinates')
-            
+                print('geometrically informed node embedding')
             else:
                 self.x_embedder = SimplePatchEmbed(in_channels, hidden_size, patch_size, bias=True)
                 self.patch_size = patch_size
+
         else:
             self.x_embedder = OverlapPatchEmbed(in_channels, hidden_size, bias=True)
             self.patch_size = 1
@@ -1817,10 +1683,12 @@ class PDEImpl(nn.Module):
 
         self.apply(_basic_init)
 
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        if self.node_embedding_type == 'geometric' or self.node_embedding_type == 'geometric_nofourier':
-            # Iterate through the Sequential block in GeometricPatchEmbed
-            for m in self.x_embedder.mlp:
+        # Initialize patch_embed convs like nn.Linear (instead of nn.Conv2d):
+        if self.node_embedding_type in ('coord_fourier', 'geometric', 'geometric_nofourier'):
+            proj = self.x_embedder.mlp
+            # geometric/geometric_nofourier -> Sequential; coord_fourier -> single Conv2d
+            modules = proj if isinstance(proj, nn.Sequential) else [proj]
+            for m in modules:
                 if isinstance(m, nn.Conv2d):
                     w = m.weight.data
                     # Flatten the spatial dimensions to initialize like a Linear layer
@@ -1828,7 +1696,7 @@ class PDEImpl(nn.Module):
                     if m.bias is not None:
                         nn.init.constant_(m.bias, 0)
         else:
-            # Fallback for the older embedder type with only one Conv2d layer named proj
+            # SimplePatchEmbed / OverlapPatchEmbed: single Conv2d named proj
             w = self.x_embedder.proj.weight.data
             nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
             if self.x_embedder.proj.bias is not None:
